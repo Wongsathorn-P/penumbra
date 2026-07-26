@@ -191,9 +191,11 @@ button:disabled{background:#2a3438;color:#6c797d;cursor:default;transform:none;b
   <div class="rule"></div>
   <div class="blurb" id="blurb">
     The Vale Observatory has been dark for eleven years. The dome is open to the storm, the floor is
-    under two inches of rainwater, and the breaker on the plinth is missing <b>six fuse cells</b>.<br><br>
+    under two inches of black rainwater, and the breaker on the plinth is missing <b>six fuse cells</b>.<br><br>
     Find them. Every cell you seat brings another bank of lights back — and the room you have been
-    feeling your way through turns out to look nothing like you thought.
+    feeling your way through turns out to look nothing like you thought.<br><br>
+    <b style="color:#a8512f">You are not the only thing moving in here.</b> Keep the lamp close.
+    When you feel it watching — <b>do not run</b>. Running is what it wants.
   </div>
   <div class="keys">
     <kbd>W A S D</kbd><span>Move &nbsp;·&nbsp; <kbd style="border:0;padding:0">Shift</kbd> sprint &nbsp;·&nbsp; <kbd style="border:0;padding:0">Ctrl</kbd> crouch</span>
@@ -388,6 +390,7 @@ function u2f(p,n,a,b){ const l=p.u[n]; if(l) gl.uniform2f(l,a,b); }
 function u3f(p,n,a,b,c){ const l=p.u[n]; if(l) gl.uniform3f(l,a,b,c); }
 function u4f(p,n,a,b,c,d){ const l=p.u[n]; if(l) gl.uniform4f(l,a,b,c,d); }
 function um4(p,n,m){ const l=p.u[n]; if(l) gl.uniformMatrix4fv(l,false,m); }
+function um3(p,n,m){ const l=p.u[n]; if(l) gl.uniformMatrix3fv(l,false,m); }
 function u4fv(p,n,a){ const l=p.u[n]; if(l) gl.uniform4fv(l,a); }
 function bindTex(p,n,unit,tex,target){
   const l=p.u[n]; if(!l) return;
@@ -713,6 +716,68 @@ function geoRock(seed, seg, rough){
 function geoBillboard(){
   return mesh([-0.5,-0.5,0, 0.5,-0.5,0, 0.5,0.5,0, -0.5,0.5,0],
               [0,0,1, 0,0,1, 0,0,1, 0,0,1], [0,1,2, 0,2,3]);
+}
+
+/* THE APPARITION — a gaunt hooded figure, feet at y=0, crown near y=1.72.
+   Built from lofted tubes + a head sphere; normals are accumulated from the
+   faces so it doesn't matter that the shroud winds inconsistently (it renders
+   double-sided anyway). The forward shader carves the face from local coords,
+   so the head sits at a fixed local position the shader knows about. */
+function geoGhost(){
+  const P=[], idx=[];
+  const SEG = 20;
+  function tube(rings, prof, rag){
+    const base = P.length/3;
+    for(let i=0;i<=rings;i++){
+      const t=i/rings, pr=prof(t);
+      for(let s=0;s<=SEG;s++){
+        const a=s/SEG*TAU;
+        let r = pr.r;
+        if(rag) r *= 1 + rag*Math.sin(a*7.0+i*0.7)*Math.pow(1-t,1.4);   // torn hem
+        P.push(pr.cx+Math.cos(a)*r, pr.y, pr.cz+Math.sin(a)*r*pr.rz);
+      }
+    }
+    for(let i=0;i<rings;i++) for(let s=0;s<SEG;s++){
+      const a=base+i*(SEG+1)+s, b=a+1, c=a+SEG+2, d=a+SEG+1;
+      idx.push(a,b,c, a,c,d);
+    }
+  }
+  // shroud: flared torn hem -> pinched waist -> narrow shoulders
+  tube(30, t=>{
+    const y = t*1.52;
+    const r = 0.30 + 0.30*Math.pow(1-t,1.7) + 0.045*Math.sin(t*7.0) - 0.05*smoothstep(0.35,0.6,t);
+    return { y, r:Math.max(r,0.12), cx:0, cz:-0.02+0.05*Math.sin(t*2.6), rz:1.0 };
+  }, 0.16);
+  // cowl / shoulders hunch
+  tube(8, t=>{ const y=1.30+t*0.30; const r=0.30-0.10*t; return {y, r, cx:0, cz:-0.04-0.05*t, rz:1.1}; }, 0.05);
+  // head
+  { const base=P.length/3, rings=14, cy=1.63, cz=-0.05, rr=0.165;
+    for(let i=0;i<=SEG;i++){ const th=i/SEG*TAU;
+      for(let j=0;j<=rings;j++){ const ph=j/rings*Math.PI, sp=Math.sin(ph);
+        P.push(Math.cos(th)*sp*rr*0.90, cy+Math.cos(ph)*rr*1.12, cz+Math.sin(th)*sp*rr*0.86); } }
+    for(let i=0;i<SEG;i++) for(let j=0;j<rings;j++){
+      const a=base+i*(rings+1)+j, b=a+rings+1, c=b+1, d=a+1; idx.push(a,b,c, a,c,d); } }
+  // two long thin arms hanging past the knees
+  for(const sgn of [-1,1]){
+    const base0=P.length/3, aseg=10, rings=16;
+    for(let i=0;i<=rings;i++){ const t=i/rings;
+      const y=1.36-t*1.12, r=0.045+t*0.055;
+      const cx=sgn*(0.24+0.12*t)+0.03*Math.sin(t*5.0), cz=0.02+0.12*t;
+      for(let s=0;s<=aseg;s++){ const a=s/aseg*TAU;
+        P.push(cx+Math.cos(a)*r, y, cz+Math.sin(a)*r); } }
+    for(let i=0;i<rings;i++) for(let s=0;s<aseg;s++){
+      const a=base0+i*(aseg+1)+s, b=a+1, c=a+aseg+2, d=a+aseg+1; idx.push(a,b,c, a,c,d); }
+  }
+  const N=new Float32Array(P.length);
+  for(let t=0;t<idx.length;t+=3){
+    const i0=idx[t]*3,i1=idx[t+1]*3,i2=idx[t+2]*3;
+    const ax=P[i1]-P[i0],ay=P[i1+1]-P[i0+1],az=P[i1+2]-P[i0+2];
+    const bx=P[i2]-P[i0],by=P[i2+1]-P[i0+1],bz=P[i2+2]-P[i0+2];
+    const nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
+    for(const ii of [i0,i1,i2]){ N[ii]+=nx; N[ii+1]+=ny; N[ii+2]+=nz; }
+  }
+  for(let i=0;i<N.length;i+=3){ const l=Math.hypot(N[i],N[i+1],N[i+2])||1; N[i]/=l; N[i+1]/=l; N[i+2]/=l; }
+  return mesh(P,N,idx);
 }
 
 /* self-test: does every triangle wind consistently with its vertex normals? */
@@ -1876,6 +1941,97 @@ void main(){
 }
 `;
 
+/* ---------- the apparition (forward, premultiplied alpha) -------------------
+   Rendered after rain into the depth-tested HDR buffer so pillars occlude it.
+   Premultiplied output: rgb already * coverage, blend (ONE, 1-alpha), so the
+   dark body dims the scene behind it (a silhouette) while the glowing rim and
+   eyes add on top and bloom. Double-sided, no depth write.                    */
+const VS_GHOST = V3+PREC+NOISE+`
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNrm;
+uniform mat4 uVP, uModel;
+uniform mat3 uNormal;
+uniform float uTime, uManifest, uCharge;
+out vec3 vLocal; out vec3 vWP; out vec3 vN; out float vWisp;
+void main(){
+  vLocal = aPos;
+  // churning smoke displacement — stronger low on the robe, calmer at the head
+  float robe = smoothstep(1.5, 0.2, aPos.y);
+  float n = fbm3(aPos*3.2 + vec3(0.0, -uTime*0.9, uTime*0.4), 3);
+  float n2= fbm3(aPos*7.0 + vec3(uTime*0.6, 0.0, -uTime*0.7), 2);
+  vWisp = n;
+  float amp = mix(0.015, 0.11, robe) * (1.0 + uCharge*0.6);
+  vec3 disp = aNrm*( (n-0.5)*2.0*amp ) + vec3((n2-0.5)*0.05*robe, 0.0, (n-0.5)*0.05*robe);
+  // sway side to side, faster while charging
+  disp.x += sin(uTime*(1.4+uCharge*4.0) + aPos.y*3.0)*0.03*robe;
+  vec3 lp = aPos + disp;
+  vec4 wp = uModel*vec4(lp,1.0);
+  vWP = wp.xyz;
+  vN = normalize(uNormal*aNrm);
+  gl_Position = uVP*wp;
+}
+`;
+const FS_GHOST = V3+PREC+NOISE+`
+in vec3 vLocal; in vec3 vWP; in vec3 vN; in float vWisp;
+uniform vec3 uCam;
+uniform float uTime, uManifest, uCharge, uSeed;
+out vec4 oCol;
+void main(){
+  vec3 V = normalize(uCam - vWP);
+  float NoV = abs(dot(normalize(vN), V));           // double-sided
+  float fres = pow(1.0 - NoV, 2.4);
+
+  // ---- carve the face from local coordinates (head centred ~ (0,1.63,-0.05)) ----
+  vec3 hp = vLocal - vec3(0.0, 1.63, -0.14);         // front of the face
+  float faceZone = smoothstep(0.22, 0.10, length(vLocal - vec3(0.0,1.63,-0.05)));
+  // two deep, sunken eye sockets
+  float eyeL = length((vLocal - vec3(-0.062,1.672,-0.135))*vec3(1.0,0.85,0.6));
+  float eyeR = length((vLocal - vec3( 0.062,1.672,-0.135))*vec3(1.0,0.85,0.6));
+  float socket = clamp(smoothstep(0.072,0.028,eyeL) + smoothstep(0.072,0.028,eyeR), 0.0, 1.0);
+  // a long agape mouth
+  float mouth = smoothstep(0.35,0.9, 1.0 - (abs(vLocal.x)*10.0 + abs(vLocal.y-1.55)*8.0 + abs(vLocal.z+0.13)*5.0));
+  float carve = clamp(socket + mouth, 0.0, 1.0) * faceZone;
+
+  // ---- dissolving wisps ----
+  float wn = fbm3(vWP*2.3 + vec3(0.0,-uTime*1.1,uTime*0.5) + uSeed, 3);
+  float hem = smoothstep(-0.1, 0.55, vLocal.y + (wn-0.5)*0.6);   // frays into nothing at the feet
+  float edgeCut = smoothstep(0.28, 0.62, wn + fres*0.5);
+  float cover = uManifest * hem * mix(0.55, 1.0, edgeCut);
+  cover *= 0.55 + 0.45*fres + 0.5*carve*0.0;                     // thinner in the middle -> a shell
+  cover = clamp(cover, 0.0, 0.92);
+
+  // interior is a cold void; the face carve punches it to true black
+  vec3 body = vec3(0.012,0.018,0.024);
+  body *= (1.0 - carve*0.98);
+
+  // a pale, waxy face so the black sockets and gaping mouth actually read
+  float faceLit = faceZone * (1.0 - carve) * (0.55 + 0.45*NoV);
+  vec3 skin = mix(vec3(0.16,0.19,0.22), vec3(0.34,0.30,0.30), uCharge) * faceLit;
+
+  // rim glow — bone-cold, flushing to a sick pale white during the charge
+  vec3 rimCold = vec3(0.30,0.42,0.52);
+  vec3 rimHot  = vec3(0.85,0.83,0.86);
+  vec3 rim = mix(rimCold, rimHot, uCharge) * fres * (1.3 + uCharge*2.2);
+
+  // eyes: hollow pinpricks that ignite blood-red as it charges you
+  float eyeCore = clamp(smoothstep(0.045,0.0,eyeL)+smoothstep(0.045,0.0,eyeR),0.0,1.0) * faceZone;
+  vec3 eyeGlow = mix(vec3(0.05,0.07,0.09), vec3(1.6,0.06,0.02), uCharge) * eyeCore *
+                 (0.6 + 0.4*sin(uTime*3.0)) * (0.5 + uCharge*3.5);
+
+  // subtle internal breathing flicker
+  float flick = 0.82 + 0.18*sin(uTime*11.0 + vWP.y*3.0) + 0.1*(fbm3(vWP*0.5+uTime*0.2,2)-0.5);
+
+  vec3 glow = (rim + skin + eyeGlow) * flick;
+  vec3 rgb  = (body + glow);
+  // the face is more solid than the wispy robe, so the features hold
+  float a   = clamp(cover + faceLit*0.35*uManifest + eyeCore*0.3, 0.0, 0.95);
+
+  if(a < 0.004) discard;
+  // premultiplied
+  oCol = vec4(rgb * a, a);
+}
+`;
+
 /* ---------- bloom: 13-tap downsample, 9-tap tent upsample ------------------- */
 const FS_BLOOM_PRE = V3+PREC+TONEMAP+`
 in vec2 vUV;
@@ -1985,6 +2141,7 @@ uniform sampler2D uHDR, uBloom;
 uniform vec2 uRes;
 uniform float uExposure, uBloomAmt, uTime, uVignette, uAberr, uGrain;
 uniform float uWetLens, uFlashF;
+uniform float uDread, uScare;      // 0..1 fear grade, 0..1 jumpscare punch
 uniform int uView;          // 0 final · 1 raw src · 2 bloom · 3 normal · 4 rough · 5 ao · 6 albedo
 uniform sampler2D uGA, uGN, uAOt;
 out vec4 oCol;
@@ -2028,10 +2185,17 @@ void main(){
   float dm; vec2 doff = dropOffset(uv, uTime, dm);
   uv += doff*uWetLens;
 
-  // radial chromatic aberration — a couple of pixels at the very edge only
+  // the jumpscare tears the whole image apart for a fraction of a second
+  if(uScare > 0.001){
+    vec2 j = (vec2(hash12(gl_FragCoord.xy+uTime*91.0), hash12(gl_FragCoord.yx+uTime*57.0))-0.5);
+    uv += j * uScare*0.05;
+    uv += (uv-0.5) * uScare*0.10*sin(uTime*140.0);   // heave
+  }
+
+  // radial chromatic aberration — a couple of pixels at the edge, violent on a scare
   vec2 dir = uv-0.5;
   float r2 = dot(dir,dir);
-  float ca = uAberr*(0.35+r2*2.4);
+  float ca = uAberr*(0.35+r2*2.4) + uScare*0.05*(0.4+r2*3.0) + uDread*0.002*r2;
   vec3 c;
   c.r = texture(uHDR, uv + dir*ca*1.0).r;
   c.g = texture(uHDR, uv).g;
@@ -2052,16 +2216,38 @@ void main(){
   c = mix(c, c*c*(3.0-2.0*c), 0.16);
   c += vec3(0.006,0.012,0.017)*(1.0-luma(c));
 
-  // vignette
-  float v = 1.0 - uVignette*smoothstep(0.22, 0.95, length((uv-0.5)*vec2(1.05,1.0))*1.32);
+  // ---- DREAD grade: the room curdles the more afraid you are ----
+  if(uDread > 0.001){
+    float lum = luma(c);
+    c = mix(c, vec3(lum), uDread*0.42);                       // desaturate
+    c *= mix(vec3(1.0), vec3(0.80,0.92,0.85), uDread);        // sickly bile tint
+    c *= 1.0 - uDread*0.14*(0.5+0.5*sin(uTime*1.7));          // breathing darkness
+    // crawling static in the deepest shadows
+    float st = hash12(gl_FragCoord.xy*0.5 + fract(uTime*8.0)*1000.0)-0.5;
+    c += st*uDread*0.05*(1.0-smoothstep(0.0,0.22,lum));
+  }
+
+  // vignette — closes in hard with dread
+  float vigAmt = uVignette + uDread*0.30 + uScare*0.25;
+  float v = 1.0 - vigAmt*smoothstep(0.18, 0.95, length((uv-0.5)*vec2(1.05,1.0))*1.32);
   c *= v;
+  // a pulse of red creeping from the corners when terrified
+  float edge = smoothstep(0.45,1.15, length((uv-0.5)*vec2(1.05,1.0))*1.4);
+  c += vec3(0.16,0.0,0.0)*edge*uDread*(0.35+0.35*sin(uTime*3.3));
 
   // droplet highlight
   c += vec3(0.10,0.13,0.16)*dm*uWetLens*0.55;
 
-  // grain, scaled so the darks get more of it (like real film)
+  // ---- the scare flash: blown-out bone white slamming to blood red ----
+  if(uScare > 0.001){
+    c = mix(c, vec3(0.95,0.92,0.90), clamp(uScare*1.3,0.0,0.85));
+    c += vec3(0.5,0.02,0.0)*uScare;
+    c *= 1.0 + uScare*0.5;
+  }
+
+  // grain, scaled so the darks get more of it (like real film); dread adds more
   float g = hash12(gl_FragCoord.xy + fract(uTime)*1000.0)-0.5;
-  c += g*uGrain*(0.35+0.9*(1.0-luma(c)));
+  c += g*(uGrain + uDread*0.045)*(0.35+0.9*(1.0-luma(c)));
 
   // ordered dither to kill 8-bit banding in the long dark gradients
   float dth = (hash12(gl_FragCoord.xy*1.7)-0.5)/255.0;
@@ -2104,6 +2290,7 @@ function initPrograms(){
   R.P.volume   = prog(VS_QUAD, FS_VOLUME,    'volume');
   R.P.add      = prog(VS_QUAD, FS_ADD,       'add');
   R.P.rain     = prog(VS_RAIN, FS_RAIN,      'rain');
+  R.P.ghost    = prog(VS_GHOST, FS_GHOST,    'ghost');
   R.P.bloomPre = prog(VS_QUAD, FS_BLOOM_PRE, 'bloomPre');
   R.P.bloomDn  = prog(VS_QUAD, FS_BLOOM_DOWN,'bloomDn');
   R.P.bloomUp  = prog(VS_QUAD, FS_BLOOM_UP,  'bloomUp');
@@ -2275,6 +2462,7 @@ const GX0=19, GX1=33, GZ0=-7, GZ1=7, GCEIL=7;
 const MEZ_Y = 6.5;
 
 const colliders = [];       // axis-aligned boxes the player collides with
+const ramps = [];           // walkable sloped surfaces (stairs) — height linear in z
 const lights = [];          // punctual lights (bank -1 = always on)
 const cells = [];           // collectible fuse cells
 let breaker = null;
@@ -2283,13 +2471,35 @@ function solid(x0,y0,z0,x1,y1,z1){
   colliders.push({x0:Math.min(x0,x1), y0:Math.min(y0,y1), z0:Math.min(z0,z1),
                   x1:Math.max(x0,x1), y1:Math.max(y0,y1), z1:Math.max(z0,z1)});
 }
+// A ramp gives a smooth walking surface for stairs too steep for the AABB
+// step-up (steps shallower than the player is wide). Height is linear in z.
+function ramp(x0,x1, zA,yA, zB,yB){
+  ramps.push({ x0:Math.min(x0,x1), x1:Math.max(x0,x1),
+               zA, yA, zB, yB, zMin:Math.min(zA,zB), zMax:Math.max(zA,zB) });
+}
+function rampHeight(x,z){
+  let best = null;
+  for(let i=0;i<ramps.length;i++){
+    const r = ramps[i];
+    if(x < r.x0 || x > r.x1 || z < r.zMin || z > r.zMax) continue;
+    const t = clamp((z - r.zA)/(r.zB - r.zA), 0, 1);
+    const y = r.yA + (r.yB - r.yA)*t;
+    if(best === null || y > best) best = y;
+  }
+  return best;
+}
 /* centred box: half extents, optional Y rotation, optional collider */
 function box(cx,cy,cz, hx,hy,hz, mat, o){
   o = o||{};
   addStatic(o.mesh||'box', cx,cy,cz, o.rx||0, o.ry||0, o.rz||0, hx,hy,hz, mat, o);
   if(o.solid){
-    if(o.ry){ const e=Math.max(hx,hz)*1.42; solid(cx-e,cy-hy,cz-e, cx+e,cy+hy,cz+e); }
-    else solid(cx-hx,cy-hy,cz-hz, cx+hx,cy+hy,cz+hz);
+    if(o.ry){
+      // exact axis-aligned bound of a Y-rotated box — tighter than the old
+      // max*sqrt(2) square, so rotated props stop over-blocking the floor
+      const cc=Math.abs(Math.cos(o.ry)), ss=Math.abs(Math.sin(o.ry));
+      const ex=hx*cc+hz*ss, ez=hx*ss+hz*cc;
+      solid(cx-ex,cy-hy,cz-ez, cx+ex,cy+hy,cz+ez);
+    } else solid(cx-hx,cy-hy,cz-hz, cx+hx,cy+hy,cz+hz);
   }
 }
 function cyl(cx,cy,cz, r,h, mat, o){
@@ -2469,13 +2679,17 @@ function buildLevel(){
   railing(-14.5,-12.4, 14.5,-12.4);
 
   /* stair up to the gallery, south-west.
-     17 risers of MEZ_Y/17 = 0.382 m — under the 0.46 m step-up limit — landing
-     at z=6.6, just clear of the deck edge at 6.4 so the two never overlap. */
+     The 17 visual risers are only 0.375 m deep — shallower than the player is
+     wide — so they are DECORATIVE (non-solid). A single ramp collider spanning
+     the flight does the walking, giving a smooth climb instead of a straddled
+     tread-by-tread crawl. */
   const NST = 17;
   for(let i=0;i<NST;i++){
     const y = (i+1)*(MEZ_Y/NST), z = 12.6 - i*0.375;
-    box(-16.25, y-0.19, z, 1.75, 0.19, 0.19, MAT.CONCRETE, {uv:2.2, solid:true});
+    box(-16.25, y-0.19, z, 1.75, 0.19, 0.19, MAT.CONCRETE, {uv:2.2});
   }
+  // ramp: z=12.6 (floor) up to z=6.5 (deck top, y=MEZ_Y). x within the flight.
+  ramp(-18.0, -14.5,  12.6, 0.0,  6.5, MEZ_Y);
   box(-14.35, 3.4, 9.6, 0.12, 0.5, 3.4, MAT.CONCRETE, {uv:1.6});   // stringer
   for(let i=0;i<10;i++){
     const t=i/9, y=lerp(0.9,7.1,t), z=lerp(12.6,6.6,t);
@@ -2704,6 +2918,25 @@ function hits(x,y,z,hw,h){
 }
 function movePlayer(dt){
   const h = playerH();
+
+  // ---- de-penetration ----
+  // If we ever begin a frame embedded in a collider (a prop spawned on us, a
+  // teleport, a crouch under a low box), push out along the shallowest
+  // horizontal axis so the player can never get permanently wedged.
+  const emb = hits(PL.x, PL.y, PL.z, PL.hw, h);
+  // Only free genuine walls — a collider whose top is more than a step-up above
+  // the feet. Steppable ledges (stairs, kerbs) are left to the step-up code; if
+  // de-pen touched them it would shove the player back down every riser.
+  if(emb && (emb.y1 - PL.y) > 0.46){
+    const pxL=(PL.x+PL.hw)-emb.x0, pxR=emb.x1-(PL.x-PL.hw);
+    const pzL=(PL.z+PL.hw)-emb.z0, pzR=emb.z1-(PL.z-PL.hw);
+    const mx=Math.min(pxL,pxR), mz=Math.min(pzL,pzR);
+    if(Math.min(mx,mz) < 0.6){                 // only shallow overlaps, never big yanks
+      if(mx < mz){ PL.x += (pxL<pxR? -pxL-0.001 : pxR+0.001); }
+      else       { PL.z += (pzL<pzR? -pzL-0.001 : pzR+0.001); }
+    }
+  }
+
   // ---- vertical ----
   PL.vy -= 21.0*dt;
   let ny = PL.y + PL.vy*dt;
@@ -2725,12 +2958,29 @@ function movePlayer(dt){
     const nx = PL.x + (ax===0?d:0), nz = PL.z + (ax===0?0:d);
     const c = hits(nx, PL.y, nz, PL.hw, h);
     if(!c){ PL.x = nx; PL.z = nz; continue; }
-    // step up onto low obstacles (stairs, kerbs, the plinth)
+    // Step up onto low obstacles (stairs, kerbs, the plinth). The headroom probe
+    // ignores anything that is itself a steppable ledge — otherwise the next
+    // riser of a staircase, which sits at shin height in the player's column,
+    // reads as a ceiling and every step after the first is refused.
     const rise = c.y1 - PL.y;
-    if(rise > 0.02 && rise <= 0.46 && !hits(nx, c.y1+0.002, nz, PL.hw, h)){
-      PL.x = nx; PL.z = nz; PL.y = c.y1+0.002; PL.onGround = true; PL.vy = 0;
+    if(rise > 0.02 && rise <= 0.46){
+      const newFeet = c.y1 + 0.002;
+      const head = hits(nx, newFeet, nz, PL.hw, h);
+      if(!head || (head.y1 - newFeet) <= 0.46){
+        PL.x = nx; PL.z = nz; PL.y = newFeet; PL.onGround = true; PL.vy = 0;
+      } else if(ax===0) PL.vx = 0; else PL.vz = 0;
     } else {
       if(ax===0) PL.vx = 0; else PL.vz = 0;
+    }
+  }
+
+  // ---- ramp support (stairs) ----
+  // Snap onto the sloped surface whenever the feet are within a step of it, so
+  // steep stairs are walked smoothly instead of straddled tread by tread.
+  const rh = rampHeight(PL.x, PL.z);
+  if(rh !== null && PL.y < rh + 0.46 && PL.y > rh - 1.2){
+    if(!hits(PL.x, rh + 0.002, PL.z, PL.hw, h)){   // don't shove up into a real ceiling
+      PL.y = rh + 0.002; PL.onGround = true; if(PL.vy < 0) PL.vy = 0;
     }
   }
 }
@@ -2745,10 +2995,13 @@ function updatePlayer(dt){
   const speed = lerp(lerp(2.55, 4.65, PL.sprint), 1.30, PL.crouch);
 
   let fx = 0, fz = 0;
-  if(keys['KeyW']) fz += 1;
-  if(keys['KeyS']) fz -= 1;
-  if(keys['KeyD']) fx += 1;
-  if(keys['KeyA']) fx -= 1;
+  const frozen = GH.lock > 0;              // rooted to the spot in terror
+  if(!frozen){
+    if(keys['KeyW']) fz += 1;
+    if(keys['KeyS']) fz -= 1;
+    if(keys['KeyD']) fx += 1;
+    if(keys['KeyA']) fx -= 1;
+  }
   const l = Math.hypot(fx,fz);
   if(l > 0){ fx/=l; fz/=l; }
   const sy = Math.sin(PL.yaw), cy = Math.cos(PL.yaw);
@@ -2800,6 +3053,7 @@ function viewDir(out){
    ========================================================================== */
 const SFX = (()=>{
   let ac = null, master = null, rainG = null, humG = null, humOsc = [], noiseBuf = null, ready = false;
+  let dreadG = null, subG = null, subOsc = null;
   function makeNoise(){
     const n = ac.sampleRate*2.5;
     const b = ac.createBuffer(1, n, ac.sampleRate);
@@ -2828,6 +3082,19 @@ const SFX = (()=>{
       const g = ac.createGain(); g.gain.value = f===100?0.5:0.18;
       o.connect(g); g.connect(humG); o.start(); humOsc.push(o);
     }
+    // dread drone — a detuned, low, dissonant cluster whose level tracks fear
+    dreadG = ac.createGain(); dreadG.gain.value = 0.0;
+    const dreadLP = ac.createBiquadFilter(); dreadLP.type='lowpass'; dreadLP.frequency.value=340; dreadLP.Q.value=0.7;
+    dreadG.connect(dreadLP); dreadLP.connect(master);
+    for(const f of [36.7, 55.0, 58.3, 87.0, 110.0]){        // minor-second beats = unease
+      const o = ac.createOscillator(); o.type='sawtooth'; o.frequency.value=f;
+      const g = ac.createGain(); g.gain.value = 0.10; o.connect(g); g.connect(dreadG); o.start();
+    }
+    // sub rumble for the charge
+    subG = ac.createGain(); subG.gain.value = 0.0;
+    subOsc = ac.createOscillator(); subOsc.type='sine'; subOsc.frequency.value=41;
+    const subG2 = ac.createGain(); subG2.gain.value = 1.0;
+    subOsc.connect(subG); subG.connect(subG2); subG2.connect(master); subOsc.start();
     ready = true;
   }
   function burst(dur, freq, q, gain, type){
@@ -2872,7 +3139,57 @@ const SFX = (()=>{
       burst(2.6+d*2.0, 90-d*30, 0.5, 0.28-d*0.10, 'lowpass');
       setTimeout(()=>burst(3.4, 55, 0.4, 0.20-d*0.08, 'lowpass'), 220);
     },
-    click(){ burst(0.05, 2400, 3.0, 0.10); }
+    click(){ burst(0.05, 2400, 3.0, 0.10); },
+
+    // ---- horror bed & stingers ----
+    setDread(v){ if(ready) dreadG.gain.setTargetAtTime(clamp(v,0,1)*0.075, ac.currentTime, 0.5); },
+    setSub(v){ if(ready) subG.gain.setTargetAtTime(clamp(v,0,1)*0.16, ac.currentTime, 0.25); },
+    heartbeat(g){
+      if(!ready) return;
+      const t=ac.currentTime;
+      const thump=(off,vg)=>{
+        const o=ac.createOscillator(); o.type='sine'; const gg=ac.createGain();
+        o.frequency.setValueAtTime(78,t+off); o.frequency.exponentialRampToValueAtTime(36,t+off+0.16);
+        gg.gain.setValueAtTime(0,t+off); gg.gain.linearRampToValueAtTime(vg,t+off+0.02);
+        gg.gain.exponentialRampToValueAtTime(0.0001,t+off+0.24);
+        o.connect(gg); gg.connect(master); o.start(t+off); o.stop(t+off+0.3);
+      };
+      thump(0, 0.30*g); thump(0.21, 0.21*g);
+    },
+    breath(){ if(!ready) return; burst(0.55, 620, 0.8, 0.045, 'bandpass'); burst(0.8, 240, 0.5, 0.03, 'lowpass'); },
+    whisper(){
+      if(!ready) return;
+      const s=ac.createBufferSource(); s.buffer=noiseBuf; s.playbackRate.value=0.5+Math.random()*0.3;
+      const bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1000+Math.random()*1600; bp.Q.value=7;
+      const g=ac.createGain(); const pan=ac.createStereoPanner(); pan.pan.value=Math.random()*1.8-0.9;
+      const t=ac.currentTime; const dur=0.6+Math.random()*0.6;
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.07,t+0.12);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      s.connect(bp); bp.connect(g); g.connect(pan); pan.connect(master); s.start(t); s.stop(t+dur+0.1);
+    },
+    whoosh(){
+      if(!ready) return;
+      const s=ac.createBufferSource(); s.buffer=noiseBuf; s.loop=true;
+      const bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.Q.value=1.1;
+      const t=ac.currentTime;
+      bp.frequency.setValueAtTime(280,t); bp.frequency.exponentialRampToValueAtTime(2600,t+1.05);
+      const g=ac.createGain(); g.gain.setValueAtTime(0.0,t);
+      g.gain.linearRampToValueAtTime(0.16,t+0.7); g.gain.exponentialRampToValueAtTime(0.0001,t+1.3);
+      s.connect(bp); bp.connect(g); g.connect(master); s.start(t); s.stop(t+1.4);
+    },
+    stinger(){
+      if(!ready) return;
+      const t=ac.currentTime;
+      master.gain.cancelScheduledValues(t);
+      master.gain.setValueAtTime(0.85,t);
+      master.gain.linearRampToValueAtTime(1.0,t+0.02);
+      master.gain.linearRampToValueAtTime(0.85,t+1.5);
+      burst(1.1, 2000, 0.4, 0.5, 'highpass');       // the shriek of static
+      burst(1.7, 110, 0.5, 0.55, 'lowpass');        // the impact
+      for(const f of [175,187,372,556,743]) tone(f, 1.0, 0.14, 'sawtooth', f*0.5);  // dissonant cluster
+      tone(880, 1.25, 0.20, 'sawtooth', 62);        // downward scream
+      tone(52, 1.5, 0.32, 'sine', 28);              // sub hit
+    }
   };
 })();
 
@@ -2964,9 +3281,160 @@ function interact(){
 }
 
 /* ==========================================================================
+   THE HAUNTING — dread meter, the apparition, and its jumpscares
+   ========================================================================== */
+let dread = 0, dreadTarget = 0, blackout = 0, hbPhase = 0, whisperT = 6;
+const GH = {
+  state:'dormant',      // dormant | manifest | stalk | charge | scare
+  x:0, y:0, z:0, yaw:0,
+  manifest:0, charge:0, scare:0, present:false,
+  cd: 26,               // seconds to the first appearance
+  stateT: 0, seenT: 0, shake: 0, lock: 0, seed: 1, scares: 0
+};
+const GHCOL = { x:0,y:0,z:0 };
+
+function ghDist(){ return Math.hypot(PL.x-GH.x, PL.z-GH.z); }
+function playerLooksAt(px,pz){
+  const dx=px-PL.x, dz=pz-PL.z, d=Math.hypot(dx,dz)||1;
+  const fx=Math.sin(PL.yaw), fz=-Math.cos(PL.yaw);
+  return (dx/d)*fx + (dz/d)*fz;         // 1 = dead centre, <0 = behind
+}
+// a standable-ish spawn: on a ring around the player, off to the side/behind
+function ghChooseSpawn(){
+  const R0 = 8.5 + Math.random()*5;
+  let best=null;
+  for(let k=0;k<14;k++){
+    const a = PL.yaw + (Math.random()<0.5?1:-1)*(0.7+Math.random()*1.9);  // 40°..150° off view
+    const x = PL.x + Math.sin(a)*R0, z = PL.z - Math.cos(a)*R0;
+    if(x<-17||x>17||z<-14||z>14) continue;                 // stay in the atrium
+    if(hits(x, 0.1, z, 0.4, 1.6)) continue;                // not inside a pillar/prop
+    best = {x,z}; break;
+  }
+  if(!best){ best = { x: PL.x - Math.sin(PL.yaw)*9, z: PL.z + Math.cos(PL.yaw)*9 }; }
+  return best;
+}
+function ghManifest(force){
+  const s = ghChooseSpawn();
+  GH.x = s.x; GH.z = s.z; GH.y = -0.35;
+  GH.state='manifest'; GH.manifest=0; GH.charge=0; GH.scare=0; GH.stateT=0; GH.seenT=0;
+  GH.present=true; GH.seed = 1+Math.floor(Math.random()*97);
+  SFX.whisper(); SFX.breath();
+  if(Math.random()<0.5) toast(WHISPERS[Math.floor(Math.random()*WHISPERS.length)], 2600);
+}
+const WHISPERS = [
+  'you left the lights off',
+  'i was here first',
+  'don’t turn around',
+  'it remembers you',
+  'stay in the dark with me',
+  'you shouldn’t have come back'
+];
+function ghTriggerScare(){
+  GH.state='scare'; GH.stateT=0; GH.scare=1; GH.lock=0.55; GH.shake=1.0;
+  GH.scares++;
+  SFX.stinger();
+  dread = 1; dreadTarget = 1;
+  blackout = 1;                       // the room drops dark at the peak
+  PL.batt = Math.max(0, PL.batt-0.10);
+  PL.lamp = false;                    // your lamp dies in your hand
+  toast('', 10);
+}
+function updateGhost(dt){
+  GH.lock = Math.max(0, GH.lock - dt);
+  GH.shake = Math.max(0, GH.shake - dt*2.2);
+  const dist = ghDist();
+
+  switch(GH.state){
+  case 'dormant': {
+    GH.present = false; GH.manifest = lerp(GH.manifest, 0, clamp(dt*3,0,1));
+    // haunts come faster the darker it is, the more power is on, the more afraid you are
+    const rate = 1 + dread*0.9 + installed*0.22 + (PL.lamp?0:0.4);
+    GH.cd -= dt*rate;
+    if(GH.cd <= 0 && !won) ghManifest();
+    break;
+  }
+  case 'manifest': {
+    GH.stateT += dt;
+    GH.manifest = clamp(GH.manifest + dt/1.6, 0, 1);
+    GH.y = lerp(GH.y, 0.0, clamp(dt*1.5,0,1));          // rises out of the water
+    // face the player
+    GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
+    if(GH.manifest >= 1){ GH.state='stalk'; GH.stateT=0; }
+    if(whisperT>1.2 && Math.random()<dt*0.6){ SFX.whisper(); whisperT=0; }
+    break;
+  }
+  case 'stalk': {
+    GH.stateT += dt;
+    GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
+    // drift toward the player, slowly, hovering just out of reach
+    const dx=PL.x-GH.x, dz=PL.z-GH.z, d=Math.hypot(dx,dz)||1;
+    const want = 3.4;                                   // hovers ~3.4 m away
+    const spd = 0.9 + dread*0.6;
+    if(d > want){ GH.x += dx/d*spd*dt; GH.z += dz/d*spd*dt; }
+    GH.y = 0.02*Math.sin(now*1.6);
+    // dread from proximity
+    // does the player have it lit and centred? staring it down provokes it
+    const look = playerLooksAt(GH.x, GH.z);
+    const litOnIt = (PL.lamp && PL.batt>0 && look>0.86 && dist<11);
+    GH.seenT = clamp(GH.seenT + (litOnIt?1:-1.4)*dt, 0, 3);
+    if(whisperT>3 && Math.random()<dt*0.4){ SFX.whisper(); whisperT=0; }
+    // provocations: staring it down, letting it too close, or a slow-burn roll
+    const aggro = GH.seenT>1.1 || dist<2.6 || (GH.stateT>4 && Math.random()<dt*(0.05+dread*0.15));
+    if(aggro){ GH.state='charge'; GH.stateT=0; GH.charge=0; SFX.whoosh(); SFX.setSub(1); }
+    else if(GH.stateT>16){ GH.state='dormant'; GH.cd = 14+Math.random()*16; SFX.setSub(0); }  // it withdraws
+    break;
+  }
+  case 'charge': {
+    GH.stateT += dt;
+    GH.charge = clamp(GH.charge + dt*2.2, 0, 1);
+    GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
+    const dx=PL.x-GH.x, dz=PL.z-GH.z, d=Math.hypot(dx,dz)||1;
+    const spd = 7.5 + GH.stateT*4.0;                    // accelerates at you
+    GH.x += dx/d*spd*dt; GH.z += dz/d*spd*dt;
+    GH.y = lerp(GH.y, 0.0, clamp(dt*3,0,1));
+    if(d < 1.35 || GH.stateT > 1.25){ ghTriggerScare(); SFX.setSub(0); }
+    break;
+  }
+  case 'scare': {
+    GH.stateT += dt;
+    GH.scare = Math.max(0, 1 - GH.stateT/0.5);          // flash fully clears in 0.5s
+    // hold at point-blank, filling the view, then vanish
+    const dx=PL.x-GH.x, dz=PL.z-GH.z, d=Math.hypot(dx,dz)||1;
+    GH.x = PL.x - dx/d*0.9; GH.z = PL.z - dz/d*0.9; GH.y = 0.0;
+    GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
+    if(GH.stateT > 0.55){
+      GH.state='dormant'; GH.present=false; GH.manifest=0;
+      GH.scare = 0; GH.charge = 0; GH.shake = 0;         // clear every scare residue
+      GH.cd = 20 + Math.random()*22;                    // a breather before the next one
+    }
+    break;
+  }
+  }
+  if(GH.state !== 'scare' && GH.scare !== 0) GH.scare = 0;   // safety: never leave it stuck
+
+  // GHCOL follows the apparition so it can throw a cold glow on the room
+  GHCOL.x=GH.x; GHCOL.y=GH.y+1.2; GHCOL.z=GH.z;
+}
+
+/* build the ghost's model matrix + push its punctual light for this frame */
+function ghostFrame(){
+  if(!GH.present || GH.manifest < 0.01) return false;
+  const s = 1.0 + GH.charge*0.05;
+  m4.trs(M.ghost, GH.x, GH.y, GH.z, 0, GH.yaw, 0, s, s*1.05, s);
+  // normal matrix = upper-left 3x3 (rotation+near-uniform scale)
+  const m=M.ghost;
+  GH.nmat[0]=m[0]; GH.nmat[1]=m[1]; GH.nmat[2]=m[2];
+  GH.nmat[3]=m[4]; GH.nmat[4]=m[5]; GH.nmat[5]=m[6];
+  GH.nmat[6]=m[8]; GH.nmat[7]=m[9]; GH.nmat[8]=m[10];
+  return true;
+}
+GH.nmat = new Float32Array(9);
+
+/* ==========================================================================
    FRAME
    ========================================================================== */
 const M = {
+  ghost:m4.create(),
   proj:m4.create(), projJ:m4.create(), view:m4.create(),
   vp:m4.create(), vpJ:m4.create(), prevVP:m4.create(),
   invVP:m4.create(), invProj:m4.create(), invView:m4.create(),
@@ -3020,15 +3488,27 @@ function updateLights(dt){
   // pack the active set into the light texture
   const D = R.lightData;
   let n = 0;
+  const bo = 1 - blackout*0.92;          // the haunting can drop the whole grid dark
   for(const L of lights){
     if(n >= MAXL) break;
-    const amp = L.i * L.lit;
+    const amp = L.i * L.lit * bo;
     if(amp < 0.015) continue;
     const o = n*16;
     D[o+0]=L.x; D[o+1]=L.y; D[o+2]=L.z; D[o+3]=L.range;
     D[o+4]=L.r*amp; D[o+5]=L.g*amp; D[o+6]=L.b*amp; D[o+7]=L.type;
     D[o+8]=L.dx; D[o+9]=L.dy; D[o+10]=L.dz; D[o+11]=L.cosOut;
     D[o+12]=L.cosIn; D[o+13]=0; D[o+14]=0; D[o+15]=0;
+    n++;
+  }
+  // the apparition carries its own cold, sickly glow (brighter as it charges)
+  if(GH.present && GH.manifest > 0.02 && n < MAXL){
+    const amp = (0.5 + GH.charge*1.4) * GH.manifest * LIGHT_GAIN * 0.4;
+    const col = [ lerp(0.34,0.72,GH.charge), lerp(0.58,0.20,GH.charge), lerp(0.74,0.17,GH.charge) ];
+    const o = n*16;
+    D[o+0]=GHCOL.x; D[o+1]=GHCOL.y; D[o+2]=GHCOL.z; D[o+3]=6.0;
+    D[o+4]=col[0]*amp; D[o+5]=col[1]*amp; D[o+6]=col[2]*amp; D[o+7]=0;
+    D[o+8]=0; D[o+9]=-1; D[o+10]=0; D[o+11]=0;
+    D[o+12]=0; D[o+13]=0; D[o+14]=0; D[o+15]=0;
     n++;
   }
   R.nActive = n;
@@ -3075,10 +3555,16 @@ function buildDynamic(){
 function render(dt){
   const W = R.W, H = R.H, Q = QUALITY[R.q];
 
-  /* ---- camera ---- */
-  const ex = PL.x, ey = eyeY(), ez = PL.z;
-  const dir = viewDir([0,0,0]);
-  const fov = (68 + PL.sprint*4.5) * DEG;
+  /* ---- camera (with terror shake baked into the view only, not the aim) ---- */
+  const shk = GH.shake;
+  const syaw = PL.yaw   + (shk>0 ? (Math.sin(now*77.0)+Math.sin(now*51.0))*0.5*0.045*shk : 0);
+  const spit = PL.pitch + (shk>0 ? (Math.sin(now*83.0)+Math.sin(now*61.0))*0.5*0.045*shk : 0);
+  const _cp = Math.cos(spit), _sp = Math.sin(spit);
+  const dir = [ _cp*Math.sin(syaw), _sp, -_cp*Math.cos(syaw) ];
+  const ex = PL.x + (shk>0 ? Math.sin(now*67.0)*0.05*shk : 0);
+  const ey = eyeY() + (shk>0 ? Math.sin(now*71.0)*0.05*shk : 0);
+  const ez = PL.z + (shk>0 ? Math.cos(now*59.0)*0.05*shk : 0);
+  const fov = (68 + PL.sprint*4.5 + GH.charge*8.0) * DEG;
   m4.persp(M.proj, fov, W/H, 0.055, 260);
   m4.copy(M.projJ, M.proj);
   if(Q.taa){
@@ -3305,6 +3791,28 @@ function render(dt){
   gl.bindVertexArray(rr2.vaoBare);       // rain builds its own instances in the VS
   gl.drawElementsInstanced(gl.TRIANGLES, rr2.count, rr2.type, 0, Q.rain);
   gl.bindVertexArray(null);
+
+  /* ---- the apparition (forward, premultiplied alpha, double-sided) ---- */
+  if(ghostFrame()){
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(false); gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(R.P.ghost);
+    const gp = R.P.ghost;
+    um4(gp,'uVP', M.vpJ);
+    um4(gp,'uModel', M.ghost);
+    um3(gp,'uNormal', GH.nmat);
+    u3f(gp,'uCam', ex,ey,ez);
+    u1f(gp,'uTime', now);
+    u1f(gp,'uManifest', GH.manifest);
+    u1f(gp,'uCharge', GH.charge);
+    u1f(gp,'uSeed', GH.seed);
+    const gm = meshes.ghost;
+    gl.bindVertexArray(gm.vaoBare);       // single draw, model matrix via uniform
+    gl.drawElements(gl.TRIANGLES, gm.count, gm.type, 0);
+    gl.bindVertexArray(null);
+  }
+
   gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
 
   /* ================= PASS 9 — TAA ================= */
@@ -3367,6 +3875,8 @@ function render(dt){
   u1f(c,'uWetLens', clamp(0.55 + 0.45*Math.sin(now*0.2), 0.35, 1.0) *
                     (Math.hypot(PL.x,PL.z) < 9 ? 1.0 : 0.35));
   u1f(c,'uFlashF',flash);
+  u1f(c,'uDread', dread);
+  u1f(c,'uScare', GH.scare);
   u1i(c,'uView', R.view|0);
   if(R.view>=3){ bindTex(c,'uGA',2,R.gbuf.color[0]); bindTex(c,'uGN',3,R.gbuf.color[1]);
                  bindTex(c,'uAOt',4,R.ao); }
@@ -3408,6 +3918,35 @@ function loop(t){
 
     targetExposure = 1.45 / (1 + installed*0.185);
     exposure = lerp(exposure, targetExposure, clamp(dt*0.55,0,1));
+
+    // ---- the haunting ----
+    updateGhost(dt);
+    whisperT += dt;
+
+    // dread rises in the dark and with the apparition near; eases down when safe
+    const litSafety = clamp(installed/6*0.45 + (PL.lamp && PL.batt>0 ? 0.30 : 0), 0, 0.75);
+    let dt2 = (1 - litSafety) * 0.28;
+    if(GH.present) dt2 = Math.max(dt2, clamp(1 - ghDist()/12, 0, 1)*0.85);
+    if(GH.state==='charge') dt2 = 1;
+    dreadTarget = clamp(dt2, 0, 1);
+    // fear spikes fast, ebbs slow
+    dread = lerp(dread, dreadTarget, clamp(dt*(dreadTarget>dread?2.4:0.5),0,1));
+    SFX.setDread(dread);
+    SFX.setSub(GH.state==='charge' ? 1 : (GH.state==='scare'?0.6:0));
+
+    // heartbeat, faster and louder the more afraid you are
+    if(dread > 0.22){
+      hbPhase += dt*(0.9 + dread*1.9);
+      if(hbPhase >= 1){ hbPhase -= 1; SFX.heartbeat(clamp(dread*1.1,0.2,1)); }
+    } else hbPhase = 0;
+
+    // ambient blackouts once you are properly rattled
+    blackout = Math.max(0, blackout - dt*3.2);
+    if(GH.state!=='scare' && dread>0.5 && Math.random() < dt*(0.05+dread*0.15)){
+      blackout = 0.6 + Math.random()*0.4; SFX.click();
+    }
+    // ragged breathing in the dark
+    if(dread>0.35 && Math.random() < dt*0.5) SFX.breath();
 
     updateLights(dt);
     buildDynamic();
@@ -3488,6 +4027,7 @@ function bindInput(){
   });
   addEventListener('mousemove', e=>{
     if(document.pointerLockElement !== cv) return;
+    if(GH.lock > 0) return;                 // you cannot look away
     const s = 0.0021;
     PL.yaw += e.movementX*s;
     PL.pitch = clamp(PL.pitch - e.movementY*s, -1.50, 1.50);
@@ -3533,6 +4073,7 @@ function boot(){
       uploadMesh('rock1', geoRock(2, 13, 0.40));
       uploadMesh('rock2', geoRock(3, 15, 0.26));
       uploadMesh('bb',    geoBillboard());
+      uploadMesh('ghost', geoGhost());
     }],
     ['COMPILING SHADERS', ()=>{ initQuad(); initPrograms(); }],
     ['BAKING MATERIALS',  ()=>{ bakeMaterials(); }],
@@ -3592,6 +4133,7 @@ function start(){
   last = performance.now();
   cv.requestPointerLock();
   setTimeout(()=>toast('The breaker is on the plinth, under the oculus.', 5200), 1800);
+  setTimeout(()=>toast('Something exhales in the dark behind you.', 4200), 12000);
 }
 
 /* ==========================================================================
@@ -3610,6 +4152,8 @@ window.__PEN = {
              instances:inst, tris:Math.round(tris), colliders:colliders.length,
              lights:lights.length, activeLights:R.nActive,
              installed, carried, glError:gl.getError(),
+             dread:+dread.toFixed(3), ghState:GH.state, ghScare:+GH.scare.toFixed(3),
+             ghManifest:+GH.manifest.toFixed(2), blackout:+blackout.toFixed(2),
              pos:[+PL.x.toFixed(2), +PL.y.toFixed(2), +PL.z.toFixed(2)] };
   },
   winding(){
@@ -3621,7 +4165,41 @@ window.__PEN = {
   tp(x,y,z,yaw){ PL.x=x; PL.y=y; PL.z=z; if(yaw!==undefined) PL.yaw=yaw;
                  PL.vx=PL.vy=PL.vz=0; R.needReset=2; },
   press(code,v){ keys[code] = !!v; },
-  interact
+  interact,
+  GH,
+  spawnGhost(){ ghManifest(true); },
+  forceScare(){ GH.present=true; GH.manifest=1; GH.x=PL.x-Math.sin(PL.yaw)*3; GH.z=PL.z+Math.cos(PL.yaw)*3;
+                GH.state='charge'; GH.stateT=2; GH.charge=1; },
+  setGhostState(s){ GH.present=true; GH.manifest=1; GH.state=s; GH.stateT=0; },
+  // ground-floor collision audit: flood fill from spawn, report traps + unreachable targets
+  audit(){
+    const hw=PL.hw, hS=PL.hStand, step=0.25;
+    const X0=-19, X1=34, Z0=-16, Z1=16;
+    const nx=Math.round((X1-X0)/step), nz=Math.round((Z1-Z0)/step);
+    const id=(i,j)=>i*nz+j;
+    const stand=new Uint8Array(nx*nz);
+    for(let i=0;i<nx;i++) for(let j=0;j<nz;j++)
+      stand[id(i,j)] = hits(X0+i*step, 0.06, Z0+j*step, hw, hS) ? 0 : 1;
+    const si=Math.round((0-X0)/step), sj=Math.round((12.5-Z0)/step);
+    const seen=new Uint8Array(nx*nz); const q=[[si,sj]]; seen[id(si,sj)]=1;
+    while(q.length){ const [i,j]=q.pop();
+      for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const a=i+di,b=j+dj; if(a<0||b<0||a>=nx||b>=nz) continue;
+        if(seen[id(a,b)]||!stand[id(a,b)]) continue; seen[id(a,b)]=1; q.push([a,b]);
+      }
+    }
+    const reach=(x,z)=>{ const ci=Math.round((x-X0)/step), cj=Math.round((z-Z0)/step);
+      for(let r=0;r<=8;r++) for(let di=-r;di<=r;di++) for(let dj=-r;dj<=r;dj++){
+        const a=ci+di,b=cj+dj; if(a<0||b<0||a>=nx||b>=nz) continue;
+        if(stand[id(a,b)]&&seen[id(a,b)]) return true; } return false; };
+    const tg=[];
+    cells.forEach(c=> tg.push({where:c.where, ok:reach(c.x,c.z)}));
+    tg.push({where:'BREAKER', ok:reach(0,2.6)});
+    tg.push({where:'GENERATOR', ok:reach(26,0)});
+    let sc=0, rc=0; for(let k=0;k<stand.length;k++){ sc+=stand[k]; rc+=seen[k]; }
+    return { grid:[nx,nz], standableCells:sc, reachableFromSpawn:rc,
+             unreachableTargets: tg.filter(t=>!t.ok) };
+  }
 };
 
 /* pips + go */
