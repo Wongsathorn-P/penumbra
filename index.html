@@ -149,16 +149,14 @@ button:disabled{background:#2a3438;color:#6c797d;cursor:default;transform:none;b
   <div id="frame"></div>
   <div id="xh"><b></b><i></i></div>
   <div id="obj">
-    <div class="cap">OBJECTIVE</div>
-    <div class="txt" id="objTxt">Restore the breaker</div>
-    <div class="sub" id="objSub">Six fuse cells remain in the dark.</div>
+    <div class="cap">BLACKMARSH MANOR</div>
+    <div class="txt" id="objTxt">Get out of the house</div>
+    <div class="sub" id="objSub">Find a way out. You are not alone in here.</div>
   </div>
-  <div id="pips"></div>
   <div id="bat"><div class="lbl">LAMP CELL</div><div class="trk"><i class="fil"></i></div></div>
   <div id="tel">
-    <div><span class="k">SECTOR</span> <span class="v" id="telSec">ATRIUM</span></div>
-    <div><span class="k">POWER </span> <span class="hi" id="telPwr">0 / 6</span></div>
-    <div><span class="k">FPS   </span> <span class="v" id="telFps">--</span></div>
+    <div><span class="k">ROOM</span> <span class="v" id="telSec">FOYER</span></div>
+    <div><span class="k">FPS </span> <span class="v" id="telFps">--</span></div>
   </div>
   <div id="prompt"><span class="key" id="pKey">E</span><span class="act" id="pAct">Take</span></div>
   <div id="log"></div>
@@ -181,9 +179,9 @@ button:disabled{background:#2a3438;color:#6c797d;cursor:default;transform:none;b
 </div></div>
 
 <div id="done"><div class="card">
-  <h1 style="font-size:clamp(40px,8vw,84px)">The lights<br><em>hold</em></h1>
-  <div class="blurb" style="margin-top:14px">Power restored to the observatory floor.<br>
-  Look up — the storm is still going.</div>
+  <h1 style="font-size:clamp(40px,8vw,84px)">You got<br><em>out</em></h1>
+  <div class="blurb" style="margin-top:14px">The garden doors are behind you. The rain is almost a relief.<br>
+  Don't look back at the windows.</div>
 </div></div>
 
 <div id="veil"><div class="card">
@@ -2231,9 +2229,11 @@ void main(){
   float vigAmt = uVignette + uDread*0.30 + uScare*0.25;
   float v = 1.0 - vigAmt*smoothstep(0.18, 0.95, length((uv-0.5)*vec2(1.05,1.0))*1.32);
   c *= v;
-  // a pulse of red creeping from the corners when terrified
+  // a pulse of red creeping from the corners — reserved for real fear, so a
+  // merely dark room stays eerie-grey rather than washing red at rest
   float edge = smoothstep(0.45,1.15, length((uv-0.5)*vec2(1.05,1.0))*1.4);
-  c += vec3(0.16,0.0,0.0)*edge*uDread*(0.35+0.35*sin(uTime*3.3));
+  float terror = smoothstep(0.45, 1.0, uDread);
+  c += vec3(0.17,0.0,0.0)*edge*terror*(0.4+0.4*sin(uTime*3.3));
 
   // droplet highlight
   c += vec3(0.10,0.13,0.16)*dm*uWetLens*0.55;
@@ -2453,18 +2453,24 @@ function resize(){
 }
 
 /* ==========================================================================
-   LEVEL — the Vale Observatory atrium
-     x -18..18   z -15..15   floor y=0   coffered ceiling y=14   oculus r=5
-     generator room x 19..33, z -7..7
+   LEVEL — BLACKMARSH MANOR
+   A large derelict mansion explored in the dark. No objective but to get out
+   alive: reach the conservatory doors in the far east wing. Something else is
+   in the house with you.
+     footprint x[-28,28] z[-20,26] · ground ceiling 4.4 · great hall 8.6
+     upper landing y 4.5 · spawn in the entrance foyer at z 23
    ========================================================================== */
-const AX0=-18, AX1=18, AZ0=-15, AZ1=15, CEIL=14, WALLH=15.5;
-const GX0=19, GX1=33, GZ0=-7, GZ1=7, GCEIL=7;
-const MEZ_Y = 6.5;
+const CEIL = 4.4;            // ground-floor ceiling (also the rain-top reference)
+const HALL_H = 8.6;          // the great hall is double height
+const UP_Y = 4.5;            // upper landing / gallery floor level
+const MX0=-28, MX1=28, MZ0=-20, MZ1=26;
+let exitZone = null;         // {x,z,r} — step inside to escape
 
 const colliders = [];       // axis-aligned boxes the player collides with
-const ramps = [];           // walkable sloped surfaces (stairs) — height linear in z
-const lights = [];          // punctual lights (bank -1 = always on)
-const cells = [];           // collectible fuse cells
+const ramps = [];           // walkable sloped surfaces (stairs)
+const lights = [];          // punctual lights (all bank -1 = always on here)
+const flames = [];          // fire/candle light sources, animated each frame
+const cells = [];           // (legacy — unused in the mansion, kept inert)
 let breaker = null;
 
 function solid(x0,y0,z0,x1,y1,z1){
@@ -2525,382 +2531,294 @@ function addLight(x,y,z, col, intensity, range, bank, opts){
 }
 
 function buildLevel(){
-  const rnd = mulberry32(20260726);
+  const rnd = mulberry32(20260729);
   const R2 = (a,b)=>a+(b-a)*rnd();
+  const WT = 0.18;                       // wall half-thickness
+  const WALLTINT = [0.50,0.47,0.43];     // damp faded plaster
+  const WOODTINT = [0.30,0.21,0.13];
+  const DOORH = 2.15;
 
-  /* ---------------- floor + water ---------------- */
-  box(0, -0.35, 0, 20.5, 0.35, 17.0, MAT.TILE, {uv:1.4, solid:true});
-  box(26, -0.35, 0, 8.0, 0.35, 8.5, MAT.ASPHALT, {uv:1.2, solid:true});
-  addStatic('quad', 6.5, 0.045, 0, 0,0,0, 55, 1, 34, 64, {uv:1, emissive:1.0});
-
-  /* ---------------- perimeter walls ---------------- */
-  const WT = 0.6;                                   // half thickness
-  // North wall is built around three real openings (y 8.0 .. 13.4). Without the
-  // holes the clerestory is just a dark panel and the only light in the room is
-  // the oculus; with them you get three more shafts across the colonnade.
-  box(0, 4.0, AZ0-WT, 19.2, 4.0, WT, MAT.PLASTER, {uv:1.1, solid:true});
-  box(0, 14.45, AZ0-WT, 19.2, 1.05, WT, MAT.PLASTER, {uv:1.1, solid:true});
-  for(const [pcx,phx] of [[-15.25,3.95],[-4.5,2.2],[4.5,2.2],[15.25,3.95]])
-    box(pcx, 10.7, AZ0-WT, phx, 2.7, WT, MAT.PLASTER, {uv:1.1, solid:true});
-  solid(-19.2, 8.0, AZ0-2*WT, 19.2, 13.4, AZ0);     // you cannot climb out of them
-  box(0, WALLH/2, AZ1+WT, 19.2, WALLH/2, WT, MAT.PLASTER, {uv:1.1, solid:true});   // south
-  box(AX0-WT, WALLH/2, 0, WT, WALLH/2, 15.6, MAT.PLASTER, {uv:1.1, solid:true});   // west
-  // east wall, split around the doorway to the generator room
-  box(AX1+WT, WALLH/2, 8.9, WT, WALLH/2, 6.7, MAT.PLASTER, {uv:1.1, solid:true});
-  box(AX1+WT, WALLH/2, -8.9, WT, WALLH/2, 6.7, MAT.PLASTER, {uv:1.1, solid:true});
-  box(AX1+WT, (WALLH+3.4)/2+0.05, 0, WT, (WALLH-3.4)/2, 2.25, MAT.PLASTER, {uv:1.1, solid:true});
-  // door reveal
-  box(AX1+WT, 1.7, 2.4, 0.75, 1.75, 0.16, MAT.STEEL, {uv:2.4});
-  box(AX1+WT, 1.7,-2.4, 0.75, 1.75, 0.16, MAT.STEEL, {uv:2.4});
-
-  // wainscot / splash band of darker tile all round — reads as the old waterline
-  for(const [cx,cz,hx,hz] of [[0,AZ0+0.05,18.2,0.06],[0,AZ1-0.05,18.2,0.06],
-                              [AX0+0.05,0,0.06,15.2],[AX1-0.05,0,0.06,15.2]])
-    box(cx,1.05,cz, hx,1.05,hz, MAT.TILE, {uv:2.2, tint:[0.7,0.76,0.78]});
-
-  /* ---------------- tall blind arches on the long walls ---------------- */
-  for(let i=0;i<7;i++){
-    const z = -12 + i*4;
-    for(const sx of [-1,1]){
-      // pilaster recess with a round arch head; the disc's lower half hides
-      // inside the rectangle, so only the arch reads
-      box(sx*17.55, 5.6, z, 0.18, 4.6, 1.55, MAT.CONCRETE, {uv:1.6, tint:[0.82,0.85,0.86]});
-      cyl(sx*17.55, 10.2, z, 1.55, 0.18, MAT.CONCRETE, {uv:1.6, rz:Math.PI/2, tint:[0.82,0.85,0.86]});
+  /* ---- wall builder with door gaps + lintels + casings ---- */
+  function seg(isVert, fixed, a, b, doors, h, y0, mat, tint){
+    h=h===undefined?CEIL:h; y0=y0||0; mat=(mat===undefined?MAT.PLASTER:mat); tint=tint||WALLTINT;
+    const ds=(doors||[]).slice().sort((p,q)=>p[0]-q[0]);
+    let cur=a; const spans=[];
+    for(const d of ds){ if(d[0]>cur) spans.push([cur,d[0]]); cur=Math.max(cur,d[1]); }
+    if(cur<b) spans.push([cur,b]);
+    for(const s of spans){ const c=(s[0]+s[1])/2, hf=(s[1]-s[0])/2; if(hf<=0.002) continue;
+      if(isVert) box(fixed, y0+h/2, c, WT, h/2, hf, mat, {uv:1.3, solid:true, tint});
+      else       box(c, y0+h/2, fixed, hf, h/2, WT, mat, {uv:1.3, solid:true, tint}); }
+    for(const d of ds){ const c=(d[0]+d[1])/2, hf=(d[1]-d[0])/2;
+      if(DOORH<h){ if(isVert) box(fixed, y0+(DOORH+h)/2, c, WT, (h-DOORH)/2, hf, mat, {uv:1.3, solid:true, tint});
+                   else       box(c, y0+(DOORH+h)/2, fixed, hf, (h-DOORH)/2, WT, mat, {uv:1.3, solid:true, tint}); }
+      const fw=0.08;
+      if(isVert){ box(fixed, y0+DOORH/2, c-hf-fw, WT*1.15, DOORH/2, fw, MAT.WOOD, {uv:2.4, tint:WOODTINT});
+                  box(fixed, y0+DOORH/2, c+hf+fw, WT*1.15, DOORH/2, fw, MAT.WOOD, {uv:2.4, tint:WOODTINT});
+                  box(fixed, y0+DOORH+fw, c, WT*1.15, fw, hf+fw, MAT.WOOD, {uv:2.4, tint:WOODTINT}); }
+      else      { box(c-hf-fw, y0+DOORH/2, fixed, fw, DOORH/2, WT*1.15, MAT.WOOD, {uv:2.4, tint:WOODTINT});
+                  box(c+hf+fw, y0+DOORH/2, fixed, fw, DOORH/2, WT*1.15, MAT.WOOD, {uv:2.4, tint:WOODTINT});
+                  box(c, y0+DOORH+fw, fixed, hf+fw, fw, WT*1.15, MAT.WOOD, {uv:2.4, tint:WOODTINT}); }
     }
   }
-  // the openings keep their frames and mullions; the glass is long gone except
-  // for a few shards still gripped by the frame
-  for(let i=0;i<3;i++){
-    const x = -9 + i*9;
-    for(const [oy,ohy] of [[13.28,0.12],[8.12,0.12]])
-      box(x, oy, AZ0-0.35, 2.3, ohy, 0.22, MAT.RUST, {uv:3.0});
-    for(const ox of [-2.18,2.18])
-      box(x+ox, 10.7, AZ0-0.35, 0.12, 2.68, 0.22, MAT.RUST, {uv:3.0});
-    for(let m=1;m<4;m++)
-      box(x-2.3+m*1.15, 10.7, AZ0-0.35, 0.05, 2.6, 0.10, MAT.RUST, {uv:3.5});
-    for(let s=0;s<3;s++)
-      box(x-1.8+rnd()*3.6, 8.6+rnd()*4.0, AZ0-0.35, 0.30+rnd()*0.3, 0.22+rnd()*0.4, 0.03,
-          MAT.GLASS, {uv:2.0, rz:R2(-0.5,0.5)});
-    box(x, 7.85, AZ0+0.05, 2.55, 0.20, 0.55, MAT.CONCRETE, {uv:2.0});   // sill, sloped in
-  }
+  const hwall=(z,x0,x1,doors,h,y0)=>seg(false,z,x0,x1,doors,h,y0);
+  const vwall=(x,z0,z1,doors,h,y0)=>seg(true,x,z0,z1,doors,h,y0);
 
-  /* ---------------- colonnade ---------------- */
-  const PZ = [-12,-7.2,-2.4,2.4,7.2,12];
-  for(const sx of [-1,1]) for(const pz of PZ){
-    const px = sx*11.5;
-    // stepped base
-    box(px, 0.22, pz, 1.15, 0.22, 1.15, MAT.MARBLE, {uv:1.6, solid:true});
-    box(px, 0.55, pz, 0.98, 0.14, 0.98, MAT.MARBLE, {uv:1.6});
-    // fluted shaft
-    cyl(px, 6.6, pz, 0.70, 5.95, MAT.MARBLE, {uv:1.1, solid:true});
-    for(let f=0;f<14;f++){
-      const a = f/14*TAU;
-      box(px+Math.cos(a)*0.71, 6.6, pz+Math.sin(a)*0.71, 0.055, 5.9, 0.11, MAT.MARBLE,
-          {uv:1.1, ry:-a, tint:[0.9,0.91,0.9], rough:1.05});
-    }
-    // capital + abacus
-    cyl(px, 12.72, pz, 0.86, 0.18, MAT.MARBLE, {uv:1.8});
-    box(px, 13.05, pz, 1.02, 0.16, 1.02, MAT.MARBLE, {uv:1.8});
-    // entablature spanning to the next column
-    if(pz < 12) box(px, 13.55, pz+2.4, 0.62, 0.36, 2.4, MAT.CONCRETE, {uv:1.4});
-    // damp staining and moss creeping up the base
-    if(rnd()<0.7) box(px, 0.75+R2(0,0.5), pz + (rnd()<0.5?0.72:-0.72), 0.55, R2(0.3,0.7), 0.04,
-                      MAT.MOSS, {uv:2.6, rough:1.0});
-  }
-
-  /* ---------------- coffered ceiling with an oculus ---------------- */
-  // Built cell by cell rather than as one slab: the oculus has to be a real
-  // hole all the way through, or there is no moon shaft and no rain.
-  const collapsed = [];
-  const OCU = 6.0;
-  for(let gx=-18; gx<18; gx+=3) for(let gz=-15; gz<15; gz+=3){
-    const cx = gx+1.5, cz = gz+1.5;
-    const rr = Math.hypot(cx,cz);
-    if(rr < OCU) continue;                                   // the oculus
-    if(rr > 9 && rnd() < 0.055){ collapsed.push([cx,cz]); continue; }
-    box(cx, CEIL+0.35, cz, 1.32, 0.30, 1.32, MAT.CONCRETE, {uv:1.5, tint:[0.86,0.88,0.86]});
-    box(cx, CEIL+0.92, cz, 1.5, 0.28, 1.5, MAT.CONCRETE, {uv:1.0});          // roof above
-    // the two beam edges belonging to this cell
-    box(cx-1.5, CEIL+0.12, cz, 0.20, 0.55, 1.5, MAT.CONCRETE, {uv:1.3});
-    box(cx, CEIL+0.12, cz-1.5, 1.5, 0.55, 0.20, MAT.CONCRETE, {uv:1.3});
-    if(gx===15) box(cx+1.5, CEIL+0.12, cz, 0.20, 0.55, 1.5, MAT.CONCRETE, {uv:1.3});
-    if(gz===12) box(cx, CEIL+0.12, cz+1.5, 1.5, 0.55, 0.20, MAT.CONCRETE, {uv:1.3});
-  }
-  // punch the slab open again over the oculus by drawing a ring of trapezoids
-  // (cheaper than a CSG hole, and the stepped profile is what a real one has)
-  for(let i=0;i<40;i++){
-    const a = i/40*TAU, ca=Math.cos(a), sa=Math.sin(a);
-    for(let s=0;s<3;s++){
-      const rr = 5.35 + s*0.55, hh = CEIL+0.55 + s*0.42;
-      box(ca*rr, hh, sa*rr, 0.44, 0.24+s*0.05, 0.44, MAT.MARBLE, {uv:2.0, ry:-a, tint:[0.78,0.8,0.79]});
-    }
-    // copper ribs radiating out from the lip, half of them gone
-    if(i%2===0 && rnd()<0.8)
-      box(ca*7.6, CEIL+1.55, sa*7.6, 1.9, 0.10, 0.16, MAT.COPPER, {uv:2.2, ry:-a});
-  }
-  cyl(0, CEIL+0.4, 0, 5.3, 0.06, MAT.COPPER, {uv:3.0, mesh:'tor', rx:0});
-  // rubble under every collapsed coffer, plus a shaft of light through the gap
-  for(const [cx,cz] of collapsed){
-    for(let k=0;k<7;k++){
-      const rx=cx+R2(-1.6,1.6), rz=cz+R2(-1.6,1.6), s=R2(0.16,0.52);
-      addStatic('rock'+(k%3), rx, s*0.55, rz, R2(0,6.3),R2(0,6.3),R2(0,6.3),
-                s*R2(0.7,1.5), s, s*R2(0.7,1.5), MAT.CONCRETE, {uv:2.2, rough:1.05});
-    }
-    for(let k=0;k<3;k++)
-      cyl(cx+R2(-1.2,1.2), R2(0.1,0.5), cz+R2(-1.2,1.2), 0.018, R2(0.3,0.9), MAT.RUST,
-          {uv:6, rx:R2(-1,1), rz:R2(-1,1), mesh:'cyl8'});
-  }
-
-  /* ---------------- mezzanine gallery (U along W, N, E) ---------------- */
-  function deck(x0,z0,x1,z1){
-    const cx=(x0+x1)/2, cz=(z0+z1)/2, hx=(x1-x0)/2, hz=(z1-z0)/2;
-    box(cx, MEZ_Y-0.2, cz, hx, 0.2, hz, MAT.CONCRETE, {uv:1.4, solid:true});
-    box(cx, MEZ_Y-0.52, cz, hx-0.06, 0.14, hz-0.06, MAT.STEEL, {uv:2.0, tint:[0.45,0.45,0.45]});
-  }
-  // The west deck stops at z=4.6 to leave the stair well open — run it to the
-  // south wall and the underside of the deck closes to 0.27 m over the steps.
-  deck(AX0, -13.0, -14.5, 6.4);
-  deck(14.5, -13.0, AX1,  13.0);
-  deck(-14.5, AZ0, 14.5, -12.4);
-  // railings on the inner edges
-  function railing(x0,z0,x1,z1){
-    const n = Math.max(2, Math.round(Math.hypot(x1-x0,z1-z0)/1.5));
-    for(let i=0;i<=n;i++){
-      const t=i/n, x=lerp(x0,x1,t), z=lerp(z0,z1,t);
-      cyl(x, MEZ_Y+0.53, z, 0.035, 0.53, MAT.STEEL, {uv:5, mesh:'cyl8'});
-    }
-    const cx=(x0+x1)/2, cz=(z0+z1)/2, hx=Math.abs(x1-x0)/2+0.04, hz=Math.abs(z1-z0)/2+0.04;
-    for(const hy of [1.02, 0.62]) cyl(cx, MEZ_Y+hy, cz, 0.035, Math.max(hx,hz), MAT.STEEL,
-      {uv:5, rz: hx>hz?Math.PI/2:0, ry: hz>hx?0:0, rx: hz>hx?Math.PI/2:0, mesh:'cyl8'});
-    solid(cx-hx, MEZ_Y, cz-hz, cx+hx, MEZ_Y+1.1, cz+hz);
-  }
-  railing(-14.5,-12.4,-14.5, 6.4);
-  railing( 14.5,-12.4, 14.5,13.0);
-  railing(-14.5,-12.4, 14.5,-12.4);
-
-  /* stair up to the gallery, south-west.
-     The 17 visual risers are only 0.375 m deep — shallower than the player is
-     wide — so they are DECORATIVE (non-solid). A single ramp collider spanning
-     the flight does the walking, giving a smooth climb instead of a straddled
-     tread-by-tread crawl. */
-  const NST = 17;
-  for(let i=0;i<NST;i++){
-    const y = (i+1)*(MEZ_Y/NST), z = 12.6 - i*0.375;
-    box(-16.25, y-0.19, z, 1.75, 0.19, 0.19, MAT.CONCRETE, {uv:2.2});
-  }
-  // ramp: z=12.6 (floor) up to z=6.5 (deck top, y=MEZ_Y). x within the flight.
-  ramp(-18.0, -14.5,  12.6, 0.0,  6.5, MEZ_Y);
-  box(-14.35, 3.4, 9.6, 0.12, 0.5, 3.4, MAT.CONCRETE, {uv:1.6});   // stringer
-  for(let i=0;i<10;i++){
-    const t=i/9, y=lerp(0.9,7.1,t), z=lerp(12.6,6.6,t);
-    cyl(-14.35, y, z, 0.03, 0.5, MAT.STEEL, {uv:5, mesh:'cyl8'});
-  }
-
-  /* ---------------- central plinth + breaker ---------------- */
-  for(let s=0;s<3;s++){
-    const r = 3.4 - s*0.42, h = 0.16;
-    cyl(0, 0.16+s*0.32, 0, r, h, MAT.MARBLE, {uv:1.5, solid:true});
-  }
-  cyl(0, 0.86, 0, 2.35, 0.14, MAT.MARBLE, {uv:1.5, solid:true});
-  // the console itself
-  box(0, 1.55, -0.35, 0.95, 0.62, 0.34, MAT.PAINT, {uv:2.0, solid:true, tint:[0.75,0.85,0.88]});
-  box(0, 2.24, -0.35, 1.0, 0.08, 0.40, MAT.STEEL, {uv:3.0});
-  box(0, 1.0, -0.35, 1.05, 0.14, 0.44, MAT.STEEL, {uv:3.0});
-  box(0, 1.62, -0.68, 0.86, 0.44, 0.03, MAT.STEEL, {uv:4.0, tint:[0.35,0.38,0.4]});
-  for(let i=0;i<6;i++){
-    const x = -0.7 + i*0.28;
-    box(x, 1.62, -0.71, 0.09, 0.13, 0.03, MAT.RUST, {uv:6.0});
-  }
-  // conduit from the console down and out to the walls
-  for(const dir of [-1,1]){
-    cyl(dir*1.2, 0.95, -0.35, 0.07, 1.2, MAT.RUST, {uv:4, rz:Math.PI/2});
-    cyl(dir*2.4, 0.55, -0.35, 0.07, 0.42, MAT.RUST, {uv:4});
-  }
-  breaker = { x:0, y:1.7, z:-0.9, r:2.9 };   // reach from the eye; 2.3 was unforgiving
-
-  /* ---------------- debris, props, plant life ---------------- */
-  const propSeeds = [
-    [-6.5, 9.2], [7.8, 10.5], [13.2,-9.8], [-13.5,-6.2], [4.5,-12.0],
-    [-9.0, 3.4], [9.6, 4.8], [-3.2,-9.4], [15.6, 6.0], [-16.0, 2.0]
-  ];
-  for(const [px,pz] of propSeeds){
-    const kind = Math.floor(rnd()*4);
-    if(kind===0){                                     // crate stack
-      const n = 1+Math.floor(rnd()*3);
-      for(let i=0;i<n;i++){
-        const s=R2(0.36,0.5);
-        box(px+R2(-0.3,0.3), s+i*s*2.02, pz+R2(-0.3,0.3), s,s,s, MAT.WOOD,
-            {uv:1.6, ry:R2(0,3.14), solid:true, mesh:'boxr'});
+  /* ---- exterior wall with window openings (moonlight rakes through) ---- */
+  function extWall(isVert, fixed, a, b, wins){
+    // full-height wall with a full gap at each window, then fill sill/header/muntins
+    seg(isVert, fixed, a, b, wins.map(w=>[w-0.85,w+0.85]), CEIL, 0);
+    const yS=1.0, yH=2.9;
+    for(const w of wins){ const hf=0.85;
+      if(isVert){
+        box(fixed, yS/2, w, WT, yS/2, hf, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
+        box(fixed, (yH+CEIL)/2, w, WT, (CEIL-yH)/2, hf, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
+        box(fixed, (yS+yH)/2, w, WT*0.5, (yH-yS)/2, 0.035, MAT.WOOD,{uv:3,solid:true,tint:[0.16,0.13,0.1]});
+        box(fixed, (yS+yH)/2, w, WT*0.5, 0.035, hf, MAT.WOOD,{uv:3,tint:[0.16,0.13,0.1]});
+      } else {
+        box(w, yS/2, fixed, hf, yS/2, WT, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
+        box(w, (yH+CEIL)/2, fixed, hf, (CEIL-yH)/2, WT, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
+        box(w, (yS+yH)/2, fixed, 0.035, (yH-yS)/2, WT*0.5, MAT.WOOD,{uv:3,solid:true,tint:[0.16,0.13,0.1]});
+        box(w, (yS+yH)/2, fixed, hf, 0.035, WT*0.5, MAT.WOOD,{uv:3,tint:[0.16,0.13,0.1]});
       }
-    } else if(kind===1){                              // barrels
-      for(let i=0;i<2+Math.floor(rnd()*2);i++)
-        cyl(px+R2(-0.9,0.9), 0.56, pz+R2(-0.9,0.9), 0.31, 0.56, MAT.PAINT,
-            {uv:2.2, solid:true, tint:[R2(0.5,1.0),R2(0.35,0.7),R2(0.3,0.5)]});
-    } else if(kind===2){                              // collapsed slab leaning on nothing
-      box(px, 1.35, pz, 1.5, 0.16, 1.05, MAT.CONCRETE,
-          {uv:1.3, rz:R2(0.5,1.0)*(rnd()<0.5?-1:1), ry:R2(0,3.14), solid:true});
-      for(let k=0;k<4;k++)
-        cyl(px+R2(-1,1), R2(0.4,1.8), pz+R2(-1,1), 0.016, R2(0.4,1.0), MAT.RUST,
-            {uv:6, rx:R2(-1.2,1.2), rz:R2(-1.2,1.2), mesh:'cyl8'});
-    } else {                                          // rubble mound + weeds
-      for(let k=0;k<9;k++){
-        const s=R2(0.14,0.46);
-        addStatic('rock'+(k%3), px+R2(-1.4,1.4), s*0.6, pz+R2(-1.4,1.4),
-                  R2(0,6.3),R2(0,6.3),R2(0,6.3), s*R2(0.8,1.6), s, s*R2(0.8,1.6),
-                  rnd()<0.3?MAT.CONCRETE:MAT.ASPHALT, {uv:2.4});
-      }
-      solid(px-1.3,0,pz-1.3,px+1.3,0.5,pz+1.3);
-      for(let k=0;k<5;k++)
-        box(px+R2(-1.5,1.5), R2(0.1,0.35), pz+R2(-1.5,1.5), 0.02, R2(0.15,0.4), 0.08, MAT.MOSS,
-            {uv:4, ry:R2(0,3.14), rz:R2(-0.4,0.4)});
     }
   }
-  // Moss along the waterline — WALLS ONLY.
-  // Flat patches lying on the floor used to span y 0.035..0.075, straddling the
-  // water sheet at 0.045 and standing 30 mm proud of it. Seen at eye level most
-  // of the floor is grazing, so each patch foreshortened into a sub-pixel sliver
-  // that won or lost the depth test per pixel — that was the speckle over the
-  // whole flooded floor. Algae on the water is done in the water shader instead,
-  // which is both cheaper and what you would actually see.
-  for(let i=0;i<110;i++){
-    const side=Math.floor(rnd()*4);
-    let x,z,ry;
-    if(side===0){ x=R2(AX0+1,AX1-1); z=AZ0+0.12; ry=0; }
-    else if(side===1){ x=R2(AX0+1,AX1-1); z=AZ1-0.12; ry=0; }
-    else if(side===2){ x=AX0+0.12; z=R2(AZ0+1,AZ1-1); ry=Math.PI/2; }
-    else { x=AX1-0.12; z=R2(AZ0+1,AZ1-1); ry=Math.PI/2; }
-    box(x, R2(0.10,0.55), z, R2(0.2,0.9), R2(0.1,0.4), R2(0.2,0.9),
-        MAT.MOSS, {uv:R2(1.5,3.5), ry, rough:1.0, tint:[R2(0.6,1.1),R2(0.8,1.15),R2(0.5,0.9)]});
+
+  /* ---- floors & ceilings ---- */
+  function floorSlab(x0,z0,x1,z1,mat,tint,uv){
+    addStatic('quad',(x0+x1)/2,0.02,(z0+z1)/2,0,0,0, Math.abs(x1-x0),1,Math.abs(z1-z0), mat,
+      {uv:uv||1.6, tint:tint||[0.5,0.4,0.3]});
   }
-  // hanging vines from the oculus lip and the broken coffers
-  for(let i=0;i<26;i++){
-    const a=rnd()*TAU, rr=R2(5.4,7.4), len=R2(0.8,3.4);
-    cyl(Math.cos(a)*rr, CEIL+0.3-len, Math.sin(a)*rr, 0.022, len, MAT.MOSS,
-        {uv:5, rx:R2(-0.12,0.12), rz:R2(-0.12,0.12), mesh:'cyl8'});
+  function ceilSlab(x0,z0,x1,z1,y,tint){
+    box((x0+x1)/2, y+0.15, (z0+z1)/2, Math.abs(x1-x0)/2, 0.15, Math.abs(z1-z0)/2, MAT.PLASTER,
+      {uv:1.4, solid:true, tint:tint||[0.34,0.32,0.30]});
+  }
+  function baseboard(isVert,fixed,a,b,y0){ // dark skirting where wall meets floor
+    const c=(a+b)/2, hf=Math.abs(b-a)/2;
+    if(isVert) box(fixed,(y0||0)+0.14,c, WT*1.2,0.14,hf, MAT.WOOD,{uv:3,tint:WOODTINT});
+    else       box(c,(y0||0)+0.14,fixed, hf,0.14,WT*1.2, MAT.WOOD,{uv:3,tint:WOODTINT});
   }
 
-  /* ---------------- service pipes ---------------- */
-  for(const [y,mat,rad] of [[9.3,MAT.RUST,0.13],[9.7,MAT.STEEL,0.09],[4.6,MAT.RUST,0.16]]){
-    for(const sx of [-1,1]){
-      cyl(sx*17.1, y, 0, rad, 15.0, MAT.STEEL===mat?MAT.STEEL:mat, {uv:2.2, rx:Math.PI/2});
-      for(let i=0;i<9;i++)
-        cyl(sx*17.1, y, -14+i*3.5, rad*1.35, 0.09, MAT.STEEL, {uv:4, rx:Math.PI/2});
-    }
-    cyl(0, y, AZ0+0.9, rad, 17.8, mat, {uv:2.2, rz:Math.PI/2});
-  }
-  for(let i=0;i<5;i++){
-    const z=-10+i*5;
-    cyl(17.1, 6.95, z, 0.16, 2.35, MAT.RUST, {uv:3.0});
-    cyl(17.1, 4.6, z, 0.3, 0.30, MAT.STEEL, {uv:3.0, mesh:'tor', rx:Math.PI/2, ry:0});
-  }
+  /* ---- furniture ---- */
+  function table(x,z,w,d,h,ry){ ry=ry||0;
+    box(x,h,z, w/2,0.06,d/2, MAT.WOOD,{uv:2.2,ry,solid:true,tint:[0.26,0.17,0.10]});
+    for(const sx of [-1,1]) for(const sz of [-1,1])
+      box(x+sx*(w/2-0.1)*Math.cos(ry), h/2, z+sz*(d/2-0.1), 0.05,h/2,0.05, MAT.WOOD,{uv:4,tint:WOODTINT}); }
+  function chair(x,z,ry){ ry=ry||0;
+    box(x,0.46,z,0.20,0.04,0.20,MAT.WOOD,{uv:3,ry,solid:true,tint:[0.24,0.15,0.09]});
+    box(x-Math.sin(ry)*0.18,0.75,z-Math.cos(ry)*0.18,0.20,0.28,0.03,MAT.WOOD,{uv:3,ry,tint:WOODTINT});
+    for(const sx of [-1,1]) for(const sz of [-1,1]) box(x+sx*0.16,0.23,z+sz*0.16,0.03,0.23,0.03,MAT.WOOD,{uv:5,tint:WOODTINT}); }
+  function shelf(x,z,ry,w){ ry=ry||0; w=w||1.6;
+    box(x,1.35,z, w/2,1.35,0.22, MAT.WOOD,{uv:2,ry,solid:true,tint:[0.22,0.14,0.08]});
+    for(let i=0;i<4;i++) box(x,0.5+i*0.62,z-0.0, w/2-0.05,0.03,0.19, MAT.WOOD,{uv:3,ry,tint:[0.18,0.12,0.07]});
+    // book rows
+    for(let s=0;s<4;s++) for(let i=0;i<10;i++){
+      const bx=x + (i/10-0.45)*(w-0.1)*Math.cos(ry) - 0*Math.sin(ry);
+      const bz=z + (i/10-0.45)*(w-0.1)*Math.sin(ry);
+      box(bx,0.5+s*0.62+0.16,z, 0.035,R2(0.12,0.19),0.14, MAT.WOOD,{uv:6,ry,
+        tint:[R2(0.1,0.4),R2(0.05,0.25),R2(0.03,0.15)]}); } }
+  function sheetForm(x,z,w,d,h){ // furniture under a dust sheet — pale ghostly lump
+    box(x,h/2,z,w/2,h/2,d/2, MAT.PLASTER,{uv:2.4,solid:true,tint:[0.42,0.41,0.40],rough:1.1});
+    box(x,h+0.02,z,w/2+0.05,0.04,d/2+0.05, MAT.PLASTER,{uv:2.4,tint:[0.46,0.45,0.44],rough:1.1}); }
+  function bed(x,z,ry){ ry=ry||0;
+    box(x,0.32,z,1.05,0.28,1.5,MAT.WOOD,{uv:2,ry,solid:true,tint:[0.2,0.13,0.08]});
+    box(x,0.58,z,1.0,0.14,1.45,MAT.PLASTER,{uv:2.4,ry,tint:[0.4,0.38,0.36],rough:1.1});
+    box(x,0.72,z-1.35,1.0,0.5,0.12,MAT.WOOD,{uv:2,ry,solid:true,tint:WOODTINT}); }
+  function rug(x,z,w,d,tint){ addStatic('quad',x,0.03,z,0,0,0,w,1,d,MAT.PAINT,{uv:1.2,tint:tint||[0.28,0.08,0.07],rough:1.2}); }
+  function painting(isVert,fixed,at,y,w,tint){ // framed portrait on a wall
+    if(isVert){ box(fixed,y,at,0.06,w*0.62,w/2,MAT.WOOD,{uv:2,tint:[0.30,0.22,0.10]});
+                box(fixed-0.001*Math.sign(fixed||1),y,at,0.02,w*0.62-0.08,w/2-0.08,MAT.PAINT,{uv:1.5,tint:tint||[0.14,0.11,0.08]}); }
+    else { box(at,y,fixed,w/2,w*0.62,0.06,MAT.WOOD,{uv:2,tint:[0.30,0.22,0.10]});
+           box(at,y,fixed,w/2-0.08,w*0.62-0.08,0.02,MAT.PAINT,{uv:1.5,tint:tint||[0.14,0.11,0.08]}); } }
+  function chandelier(x,y,z,arms,warm){
+    cyl(x,y,z,0.05,0.55,MAT.STEEL,{uv:3,mesh:'cyl8',tint:[0.2,0.2,0.22]});
+    cyl(x,y-0.55,z,0.4,0.06,MAT.COPPER,{uv:3,mesh:'tor'});
+    for(let i=0;i<arms;i++){ const a=i/arms*TAU;
+      const cx=x+Math.cos(a)*0.5, cz=z+Math.sin(a)*0.5;
+      cyl(cx,y-0.5,cz,0.02,0.12,MAT.STEEL,{uv:4,mesh:'cyl8',tint:[0.4,0.3,0.15]}); }
+    const L=addLight(x,y-0.5,z, warm?[1.0,0.62,0.28]:[0.7,0.78,0.95], warm?1.1:0.5, 9, -1, {flick:0.28});
+    L.chand={x,y:y-0.5,z,arms}; }
+  function sconce(x,z,ry,intensity){ // wall light, warm, flickering
+    const ox=Math.cos(ry)*0.16, oz=Math.sin(ry)*0.16;
+    box(x,2.1,z,0.08,0.14,0.08,MAT.RUST,{uv:3,solid:false,tint:[0.25,0.18,0.1]});
+    const L=addLight(x-ox,2.15,z-oz, [1.0,0.55,0.22], intensity===undefined?0.7:intensity, 7, -1, {flick:0.35});
+    L.sconce={x:x-ox,y:2.15,z:z-oz}; flames.push({x:x-ox,y:2.2,z:z-oz,s:0.08,warm:1}); }
+  function candelabra(x,z){ box(x,0.9,z,0.04,0.9,0.04,MAT.WOOD,{uv:4,solid:false,tint:[0.15,0.12,0.08]});
+    const L=addLight(x,1.9,z,[1.0,0.6,0.24],0.35,4.5,-1,{flick:0.5}); L.candle=true;
+    flames.push({x,y:1.9,z,s:0.05,warm:1}); }
+  function fireplace(x,z,ry){ // hearth with a live fire in the drawing room
+    box(x,1.0,z,1.3,1.0,0.4,MAT.MARBLE,{uv:1.6,ry,solid:true,tint:[0.3,0.29,0.27]});
+    box(x,1.9,z,1.5,0.16,0.5,MAT.MARBLE,{uv:1.6,ry,solid:true,tint:[0.34,0.33,0.31]});
+    box(x,0.85,z+0.05,0.85,0.85,0.28,MAT.RUST,{uv:2,ry,tint:[0.05,0.04,0.03]});
+    const L=addLight(x,0.7,z+0.1,[1.0,0.5,0.16],1.9,8,-1,{flick:0.6});
+    L.fire=true; flames.push({x,y:0.6,z:z+0.1,s:0.22,warm:1,big:1}); }
 
-  /* ---------------- generator room ---------------- */
-  const GT=0.5;
-  box((GX0+GX1)/2, GCEIL/2, GZ0-GT, (GX1-GX0)/2+GT, GCEIL/2, GT, MAT.CONCRETE, {uv:1.3, solid:true});
-  box((GX0+GX1)/2, GCEIL/2, GZ1+GT, (GX1-GX0)/2+GT, GCEIL/2, GT, MAT.CONCRETE, {uv:1.3, solid:true});
-  box(GX1+GT, GCEIL/2, 0, GT, GCEIL/2, (GZ1-GZ0)/2+GT, MAT.CONCRETE, {uv:1.3, solid:true});
-  box((GX0+GX1)/2, GCEIL+0.3, 0, (GX1-GX0)/2+GT, 0.3, (GZ1-GZ0)/2+GT, MAT.CONCRETE, {uv:1.3, solid:true});
-  for(let i=0;i<6;i++) box(GX0+1.2+i*2.4, GCEIL-0.35, 0, 0.16, 0.35, 7.2, MAT.STEEL, {uv:2.2, tint:[0.4,0.42,0.44]});
-  // the generator: a big horizontal drum with a radiator and exhaust
-  cyl(26, 1.55, -3.4, 1.5, 2.6, MAT.STEEL, {uv:1.6, rz:Math.PI/2, tint:[0.55,0.58,0.6]});
-  solid(23.4, 0.05, -4.9, 28.6, 3.05, -1.9);      // cyl() cannot infer a rotated AABB
-  for(let i=0;i<7;i++) cyl(23.6+i*0.8, 1.55, -3.4, 1.58, 0.06, MAT.RUST, {uv:3.0, rz:Math.PI/2});
-  box(26, 0.35, -3.4, 3.0, 0.35, 1.7, MAT.PAINT, {uv:1.8, solid:true, tint:[0.6,0.7,0.55]});
-  box(29.4, 1.7, -3.4, 0.4, 1.7, 1.5, MAT.RUST, {uv:1.8, solid:true});
-  cyl(29.4, 4.4, -3.4, 0.24, 1.1, MAT.RUST, {uv:3.0});
-  cyl(29.4, 5.5, -3.4, 0.24, 0.6, MAT.RUST, {uv:3.0, rz:Math.PI/2});
-  // control panels
-  for(let i=0;i<4;i++){
-    const x = 21.0+i*1.6;
-    box(x, 1.25, 5.6, 0.7, 1.25, 0.35, MAT.PAINT, {uv:2.0, solid:true, tint:[0.6,0.72,0.75]});
-    box(x, 1.85, 5.22, 0.55, 0.42, 0.03, MAT.GLASS, {uv:4.0});
-    for(let k=0;k<3;k++)
-      box(x-0.35+k*0.35, 1.05, 5.22, 0.05, 0.05, 0.03, MAT.PAINT,
-          {uv:8, emissive: 0, tint:[1,0.5,0.2]});
-  }
-  // workbench
-  box(31.2, 0.9, 2.6, 1.3, 0.06, 0.8, MAT.WOOD, {uv:2.0, solid:true});
-  for(const [dx,dz] of [[-1.2,-0.7],[1.2,-0.7],[-1.2,0.7],[1.2,0.7]])
-    cyl(31.2+dx, 0.45, 2.6+dz, 0.05, 0.45, MAT.STEEL, {uv:4, mesh:'cyl8'});
-  // cable trays along the ceiling
-  for(let i=0;i<10;i++) cyl(GX0+0.5+i*1.4, 6.2, 3.2, 0.05, 0.7, MAT.RUST, {uv:5, rz:Math.PI/2, mesh:'cyl8'});
-  for(let i=0;i<6;i++){
-    const s=R2(0.2,0.45);
-    addStatic('rock'+(i%3), R2(GX0+2,GX1-2), s*0.6, R2(GZ0+1.5,GZ1-1.5),
-              R2(0,6.3),R2(0,6.3),R2(0,6.3), s,s,s, MAT.CONCRETE, {uv:2.4});
-  }
+  /* ================= SHELL ================= */
+  // ground floor + ceilings per room
+  floorSlab(MX0,MZ0,MX1,MZ1, MAT.WOOD, [0.26,0.18,0.11], 3.2);     // planks everywhere
+  floorSlab(-9,16,9,26, MAT.MARBLE, [0.32,0.31,0.30], 2.2);        // foyer marble
+  floorSlab(-9,-2,9,16, MAT.MARBLE, [0.28,0.27,0.27], 2.6);        // great hall marble
+  // ceilings (great hall is open to HALL_H; others CEIL)
+  ceilSlab(-28,16,-9,26, CEIL);  ceilSlab(9,16,28,26, CEIL);        // front wings
+  ceilSlab(-9,16,9,26, CEIL);                                       // foyer
+  ceilSlab(-28,-2,-9,16, CEIL);  ceilSlab(9,-2,28,16, CEIL);        // mid wings
+  ceilSlab(-28,-20,-9,-2, CEIL); ceilSlab(9,-20,28,-2, CEIL);       // rear wings
+  ceilSlab(-9,-20,9,-2, CEIL);                                      // rear hall
+  ceilSlab(-9,-2,9,16, HALL_H);                                     // great hall high ceiling
 
-  /* ---------------- lamps (geometry + the light that goes with it) ---------- */
-  const AMBER=[1.0,0.52,0.19], COLD=[0.72,0.84,1.0], GREEN=[0.35,1.0,0.55];
-  function sodiumLamp(x,y,z,ry,bank,intensity,flick){
-    box(x,y,z, 0.14,0.20,0.30, MAT.RUST, {uv:3.0, ry});
-    box(x, y-0.02, z, 0.30,0.14,0.24, MAT.STEEL, {uv:3.0, ry, tint:[0.4,0.4,0.4]});
-    // the glass itself is emitted as a dynamic instance so it can brighten with the bulb
-    const L = addLight(x, y-0.18, z, AMBER, intensity, 13, bank, {flick});
-    L.glass = {x, y:y-0.16, z, ry};
-    return L;
-  }
-  // two lamps still limping along before you touch anything
-  sodiumLamp(-11.5, 8.4, -2.4, 0, -1, 5.5, 0.55);
-  sodiumLamp( 11.5, 8.4,  7.2, Math.PI, -1, 4.0, 0.85);
-  // bank 0 — the plinth
-  sodiumLamp(-11.5, 8.4, 2.4, 0, 0, 7.0, 0.12);
-  sodiumLamp( 11.5, 8.4,-2.4, Math.PI, 0, 7.0, 0.12);
-  // bank 1 / 2 — the colonnades
-  for(let i=0;i<3;i++) sodiumLamp(-11.5, 8.4, [-12,-7.2,12][i], 0, 1, 6.0, 0.05);
-  for(let i=0;i<3;i++) sodiumLamp( 11.5, 8.4, [-12,2.4,12][i], Math.PI, 2, 6.0, 0.05);
-  // bank 3 — mezzanine strip lights (cold, cheap fluorescents)
-  for(let i=0;i<6;i++){
-    const z = -11 + i*4.6;
-    for(const sx of [-1,1]){
-      box(sx*16.2, MEZ_Y+2.6, z, 0.1, 0.06, 0.62, MAT.STEEL, {uv:3.0});
-      addLight(sx*16.2, MEZ_Y+2.45, z, COLD, 3.4, 9, 3, {flick:0.03});
-    }
-  }
-  // bank 4 — generator room floods
-  addLight(24.0, 6.0, 0.0, COLD, 9.0, 15, 4, {flick:0.02});
-  addLight(30.0, 6.0, 0.0, COLD, 7.0, 13, 4, {flick:0.02});
-  addLight(21.5, 2.6, 4.4, GREEN, 1.6, 5, 4, {flick:0.0});
-  box(24.0, 6.35, 0.0, 0.5, 0.1, 0.28, MAT.STEEL, {uv:3});
-  box(30.0, 6.35, 0.0, 0.5, 0.1, 0.28, MAT.STEEL, {uv:3});
-  // bank 5 — the four dome floods that finish the job
-  for(let i=0;i<4;i++){
-    const a = Math.PI/4 + i*Math.PI/2;
-    const x = Math.cos(a)*8.6, z = Math.sin(a)*8.6;
-    box(x, CEIL-0.55, z, 0.34, 0.26, 0.34, MAT.STEEL, {uv:2.6, ry:-a});
-    cyl(x, CEIL-0.15, z, 0.06, 0.35, MAT.STEEL, {uv:4, mesh:'cyl8'});
-    const dl = [-x, -6.0, -z]; const L2 = Math.hypot(dl[0],dl[1],dl[2]);
-    addLight(x, CEIL-0.85, z, [1.0,0.93,0.84], 42.0, 26, 5,
-             {dir:[dl[0]/L2, dl[1]/L2, dl[2]/L2], inner:26, outer:52, flick:0.0});
-  }
+  /* ================= EXTERIOR WALLS ================= */
+  extWall(false, 26, MX0, MX1, [-20,-14,14,20]);                   // front (with the sealed doors below)
+  hwall(26, -3, 3, [], CEIL);                                      // (front doors are solid/chained)
+  extWall(false, MZ0, MX0, MX1, [-20,-6,6,20]);                    // rear
+  extWall(true, MX0, MZ0, MZ1, [-14,-6,6,14,20]);                  // west
+  // east wall — the EXIT is a full doorway in the ballroom (z -16..-13)
+  extWall(true, MX1, MZ0, MZ1, [6,14,20]);
+  vwall(MX1, MZ0, -2, [[-16.5,-13]], CEIL);                        // ballroom east: exit gap + rest wall
+  vwall(MX1, -2, MZ1, [], CEIL);
+  exitZone = { x:29.0, z:-14.75, r:2.4 };
 
-  /* ---------------- the six fuse cells ---------------- */
-  const CELLSPOTS = [
-    { x:-16.1, y:MEZ_Y+0.35, z:  2.2, where:'WEST GALLERY' },
-    { x: 31.2, y: 1.10,      z:  2.6, where:'GENERATOR ROOM' },
-    { x: 13.4, y: 0.55,      z:-10.2, where:'NORTH-EAST RUBBLE' },
-    { x:  4.6, y: 0.95,      z: 12.2, where:'SOUTH CRATES' },
-    { x:-15.9, y: 0.35,      z: 13.4, where:'UNDER THE STAIR' },
-    { x: -3.4, y: 1.05,      z:-13.4, where:'FALLEN SLAB, NORTH' },   // slab top is 0.92
-  ];
-  CELLSPOTS.forEach((s,i)=>{
-    cells.push({ id:i, x:s.x, y:s.y, z:s.z, where:s.where, taken:false, spin:i*1.1, bob:i*0.7 });
-    addLight(s.x, s.y+0.1, s.z, [0.35,0.85,1.0], 0.33, 4.2, -1, {}).cellId = i;
-  });
-  // a plinth or crate under each cell so it is sitting on something
-  box( 4.6, 0.45, 12.2, 0.5,0.45,0.5, MAT.WOOD, {uv:1.6, ry:0.3, solid:true, mesh:'boxr'});
-  box(-3.4, 0.8, -13.4, 1.4, 0.12, 0.9, MAT.CONCRETE, {uv:1.4, rz:0.18, solid:true});
-  box(-16.1, MEZ_Y+0.12, 2.2, 0.42, 0.12, 0.3, MAT.STEEL, {uv:3.0});
-  box(13.4, 0.22, -10.2, 0.5, 0.22, 0.5, MAT.CONCRETE, {uv:2.0, solid:true});
+  /* ================= INTERIOR WALLS (doorways as gaps) ================= */
+  // z=16 : front rooms / mid rooms + foyer/hall
+  hwall(16, MX0, -9, [[-18,-16]]);          // library <-> drawing
+  hwall(16, -9, 9,  [[-1.4,1.4]]);          // foyer  <-> great hall (grand opening)
+  hwall(16, 9, MX1, [[16,18]]);             // dining <-> study
+  // z=-2 : mid / rear
+  hwall(-2, MX0, -9, [[-18,-16]]);          // drawing <-> kitchen
+  hwall(-2, -9, 9,  [[-1.4,1.4]]);          // hall <-> rear hall
+  hwall(-2, 9, MX1, [[16,18]]);             // study <-> ballroom
+  // x=-9 : centre / west
+  vwall(-9, 16, 26, [[20,22]]);             // foyer <-> library
+  vwall(-9, -2, 16, [[6,8]]);               // hall  <-> drawing
+  vwall(-9, MZ0, -2, [[-8,-6]]);            // rear hall <-> kitchen
+  // x=9 : centre / east
+  vwall(9, 16, 26, [[20,22]]);              // foyer <-> dining
+  vwall(9, -2, 16, [[6,8]]);                // hall  <-> study
+  vwall(9, MZ0, -2, [[-8,-6]]);             // rear hall <-> ballroom
+
+  /* ================= GRAND STAIR + UPPER LANDING ================= */
+  // stair climbs along the great-hall west side, z 4->14, up to UP_Y
+  for(let i=0;i<16;i++){ const t=i/16, y=t*UP_Y, z=4+t*9.5;
+    box(-6.2, y+0.12, z, 1.5, 0.12+y*0.02, 0.34, MAT.WOOD,{uv:2.4,tint:[0.24,0.16,0.09]}); }
+  ramp(-7.7,-4.7, 4.0,0.0, 13.6,UP_Y);
+  box(-4.55,1.2,9.0,0.12,1.2,5.0,MAT.WOOD,{uv:2,solid:true,tint:WOODTINT});     // stair rail base
+  for(let i=0;i<12;i++){ const t=i/11; cyl(-4.55, lerp(0.4,UP_Y+0.5,t), lerp(4.5,13.4,t), 0.03,0.5, MAT.STEEL,{uv:5,mesh:'cyl8',tint:[0.2,0.2,0.22]}); }
+  // landing deck across the front of the great hall, at UP_Y
+  box(0, UP_Y-0.15, 14.0, 8.6, 0.15, 2.2, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]});
+  box(-6.2, UP_Y-0.15, 9.0, 2.4, 0.15, 5.2, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]}); // west gallery run
+  // landing balustrade (won't fall into the hall)
+  for(let i=0;i<=16;i++){ const x=-8+i, z=11.9; cyl(x,UP_Y+0.45,z,0.035,0.45,MAT.STEEL,{uv:5,mesh:'cyl8',tint:[0.2,0.2,0.22]}); }
+  box(0,UP_Y+0.92,11.9,8.6,0.05,0.06,MAT.WOOD,{uv:3,tint:WOODTINT}); solid(-8.6,UP_Y,11.75,8.6,UP_Y+1.0,12.05);
+  // upper walls enclosing two bedrooms above the foyer wings, floor at UP_Y
+  ceilSlab(-9,11.5,9,26, HALL_H);                                  // ceiling over the landing/upper
+  // bedroom west (over library front): x[-28,-9] z[16,26] at UP_Y
+  box(-18.5, UP_Y-0.15, 21, 9.5, 0.15, 5.0, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]});   // W bedroom floor
+  box(18.5, UP_Y-0.15, 21, 9.5, 0.15, 5.0, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]});    // E bedroom floor
+  // walls of the upper bedrooms (height 3)
+  hwall(16.2, -28, -9, [[-20,-18]], 3.0, UP_Y);  vwall(-9, 16.2, 26, [], 3.0, UP_Y);
+  hwall(16.2, 9, 28, [[18,20]], 3.0, UP_Y);      vwall(9, 16.2, 26, [], 3.0, UP_Y);
+  ceilSlab(-28,16,-9,26, UP_Y+3.0); ceilSlab(9,16,28,26, UP_Y+3.0);
+  // ramp landing connects to bedroom corridor via the landing deck at z14; bridge:
+  ramp(-2.0,2.0, 13.9,UP_Y, 16.0,UP_Y);          // flat bridge onto the upper front
+
+  /* ================= WINDOW MOONLIGHT (soft fills so shafts read indoors) ================= */
+  for(const wz of [-16,-8,8,16,22]){ addLight(MX0+1.2, 2.0, wz, [0.28,0.36,0.52], 0.5, 7, -1, {}); }
+  for(const wz of [-8,8,20]){ addLight(MX1-1.2, 2.0, wz, [0.28,0.36,0.52], 0.5, 7, -1, {}); }
+  for(const wx of [-20,-14,14,20]){ addLight(wx, 2.0, MZ1-1.2, [0.30,0.38,0.55], 0.5, 7, -1, {}); }
+
+  /* ================= ROOM DRESSING ================= */
+  // FOYER — grand but rotten; a dead chandelier, a console, the sealed front doors
+  chandelier(0, CEIL-0.2, 21, 8, false);
+  table(0,21,1.4,0.5,0.5,0); candelabra(-0.5,21); candelabra(0.5,21);
+  painting(true,-8.8,21,1.9,1.1,[0.12,0.10,0.09]); painting(true,8.8,21,1.9,1.1,[0.1,0.09,0.08]);
+  box(0,1.3,25.7,1.6,1.3,0.12,MAT.WOOD,{uv:2,solid:true,tint:[0.15,0.10,0.06]});   // the barred front doors
+  for(let i=0;i<4;i++) box(0,0.7+i*0.7,25.55,1.7,0.06,0.06,MAT.RUST,{uv:5,rz:R2(-0.1,0.1),tint:[0.3,0.15,0.08]});
+  sconce(-8.6,23,0,0.7); sconce(8.6,23,Math.PI,0.7); rug(0,20,4,6,[0.2,0.06,0.05]);
+  baseboard(false,26,-9,9);
+
+  // GREAT HALL — the heart; grand stair, huge dead chandelier, portraits watching
+  chandelier(2.5, HALL_H-0.4, 8, 10, false);
+  painting(true,-8.8,4,2.4,1.6,[0.13,0.10,0.08]); painting(true,-8.8,12,2.4,1.6,[0.11,0.09,0.07]);
+  painting(true,8.8,4,2.4,1.6,[0.12,0.1,0.07]); painting(true,8.8,12,2.4,1.6,[0.10,0.08,0.06]);
+  sconce(-8.6,2.5,0,0.8); sconce(8.6,2.5,Math.PI,0.8); sconce(8.6,14,Math.PI,0.7);
+  rug(3,8,5,8,[0.16,0.05,0.05]);
+  sheetForm(5.5,4,1.2,0.7,0.8); table(6,13,1.6,0.7,0.5,0.3);
+  baseboard(true,-9,-2,16); baseboard(true,9,-2,16);
+
+  // LIBRARY — walls of shelves, a reading table, a fallen ladder
+  for(let i=0;i<5;i++) shelf(-27.6, 18+i*0*0 + (17.5+i*1.7), Math.PI/2, 1.5);
+  for(let i=0;i<5;i++) shelf(-10.4, 17.5+i*1.7, -Math.PI/2, 1.5);
+  for(let i=0;i<4;i++) shelf(-25+i*3.6, 25.6, 0, 2.0);
+  table(-18.5,20,1.8,1.0,0.5,0); chair(-18.5,21.3,0); chair(-18.5,18.7,Math.PI);
+  sconce(-9.2,22,-Math.PI/2,0.6); candelabra(-18.5,20);
+  rug(-18,20,7,7,[0.14,0.07,0.04]);
+  for(let i=0;i<8;i++) box(R2(-26,-11),R2(0.05,0.2),R2(17.5,25),0.12,0.04,0.16,MAT.WOOD,{uv:6,ry:R2(0,6.28),tint:[0.2,0.12,0.06]}); // fallen books
+
+  // DINING — long table, chairs, sheeted sideboard, a chandelier
+  chandelier(18.5, CEIL-0.25, 21, 6, true);
+  table(18.5,21,3.4,1.2,0.55,0);
+  for(let i=0;i<4;i++){ chair(16.8+i*1.15,22.6,0); chair(16.8+i*1.15,19.4,Math.PI); }
+  sheetForm(11.5,24,1.6,0.6,1.0); painting(false,26,18.5,1.6,1.0,[0.12,0.1,0.08]);
+  sconce(9.2,20,Math.PI/2,0.65); rug(18.5,21,6,4,[0.15,0.05,0.05]);
+
+  // DRAWING ROOM — the fireplace, sofas under sheets, warm firelight
+  fireplace(-27.4,7,Math.PI/2);
+  sheetForm(-20,3,2.0,0.9,0.9); sheetForm(-15,3,1.8,0.9,0.9); sheetForm(-17.5,12,1.0,1.0,0.8);
+  table(-17.5,7,1.1,1.1,0.45,0); chair(-14,10,0.6);
+  painting(false,16,-18,1.6,1.1,[0.13,0.10,0.08]); sconce(-9.2,10,-Math.PI/2,0.6);
+  rug(-18,7,9,9,[0.18,0.06,0.05]);
+
+  // STUDY — desk, chair, shelves, scattered papers, a single candle
+  table(18.5,7,1.8,0.9,0.55,0.2); chair(18.5,8.6,Math.PI+0.2); candelabra(18.5,7);
+  shelf(26.4,5,-Math.PI/2,2.2); shelf(26.4,10,-Math.PI/2,2.2);
+  sheetForm(12,12,1.2,0.9,0.9); painting(true,9.3,3,1.4,0.9,[0.12,0.09,0.07]);
+  sconce(9.2,12,Math.PI/2,0.55); rug(18,7,6,6,[0.14,0.06,0.05]);
+
+  // KITCHEN — long prep table, hanging pots, a cold hearth, debris
+  table(-18.5,-11,2.6,1.0,0.5,0); table(-25,-16,1.4,0.8,0.5,0);
+  for(let i=0;i<6;i++) cyl(-20+i*0.7,2.0,-18.5,0.09,0.13,MAT.STEEL,{uv:3,tint:[0.35,0.36,0.38]}); // hung pots
+  box(-27.3,1.0,-11,0.5,1.0,1.2,MAT.RUST,{uv:2,solid:true,tint:[0.1,0.08,0.06]});                 // range/stove
+  sconce(-9.2,-8,-Math.PI/2,0.5); candelabra(-18.5,-11);
+  for(let i=0;i<10;i++) box(R2(-27,-10),R2(0.05,0.3),R2(-19,-3),R2(0.1,0.3),R2(0.05,0.2),R2(0.1,0.3),
+    MAT.WOOD,{uv:4,ry:R2(0,6.28),tint:[0.18,0.13,0.08]});
+
+  // REAR HALL — a dark spine corridor, portraits, a runner rug, flickering sconces
+  sconce(-8.6,-11,0,0.55); sconce(8.6,-11,Math.PI,0.55); sconce(0,-3.4,0,0.5);
+  painting(false,-2.3,0,1.6,1.1,[0.11,0.09,0.07]);
+  rug(0,-11,3.2,14,[0.15,0.06,0.05]);
+  sheetForm(-6,-17,1.0,1.0,1.4);
+
+  // BALLROOM — big empty room, the way OUT; tall windows, a ruined chandelier, moonlit floor
+  chandelier(18.5,CEIL-0.2,-11,10,false);
+  sconce(9.2,-6,Math.PI/2,0.6); sconce(9.2,-16,Math.PI/2,0.6);
+  painting(true,9.3,-16,1.8,1.2,[0.1,0.08,0.06]);
+  sheetForm(24,-6,1.4,1.4,1.0); sheetForm(14,-18,1.2,1.2,0.9);
+  rug(18,-11,8,10,[0.13,0.05,0.05]);
+  // moonlight pouring through the open exit + a cold guide-light so the way out reads
+  addLight(28.5,1.6,-14.75,[0.5,0.62,0.85],1.6,10,-1,{});
+  box(29.2,1.1,-14.75,0.2,1.1,1.6,MAT.PLASTER,{uv:1.3,tint:[0.4,0.42,0.5]});   // porch beyond the doors
+
+  // UPPER BEDROOMS — beds under sheets, a child's chair, one flickering candle each
+  bed(-22,20,0); sheetForm(-13,19,1.4,0.9,0.9); candelabra(-16,23);
+  addLight(-18,UP_Y+2.2,21,[1.0,0.55,0.22],0.4,6,-1,{flick:0.4});
+  bed(22,20,Math.PI); sheetForm(13,22,1.4,0.9,0.9); chair(16,18,0.4);
+  addLight(18,UP_Y+2.2,21,[1.0,0.55,0.22],0.4,6,-1,{flick:0.4});
+  // landing sconces
+  sconce(-8.6,13.5,0,0.6); sconce(8.6,13.5,Math.PI,0.6);
+
+  // a scatter of dust, cobwebs and decay everywhere (mossy damp in the corners)
+  for(let i=0;i<70;i++){
+    const x=R2(MX0+1,MX1-1), z=R2(MZ0+1,MZ1-1);
+    box(x, R2(0.03,0.12), z, R2(0.2,0.7),0.02,R2(0.2,0.7), MAT.MOSS,
+      {uv:R2(2,4), ry:R2(0,6.28), rough:1.1, tint:[R2(0.4,0.7),R2(0.5,0.8),R2(0.35,0.6)]});
+  }
 }
 
 /* ==========================================================================
    PLAYER
    ========================================================================== */
 const PL = {
-  x:0, y:0, z:12.5, vx:0, vy:0, vz:0,
-  yaw:0, pitch:-0.04, onGround:true, crouch:0, bobT:0, bob:0, roll:0,
-  hw:0.32, hStand:1.75, hCrouch:1.08, eyeOff:0.12,
+  x:0, y:0, z:23, vx:0, vy:0, vz:0,
+  yaw:0, pitch:-0.03, onGround:true, crouch:0, bobT:0, bob:0, roll:0,
+  hw:0.30, hStand:1.75, hCrouch:1.08, eyeOff:0.12,
   lamp:true, batt:1.0, lampFlick:1, sprint:0, stepAccum:0, landKick:0
 };
 const keys = Object.create(null);
@@ -3206,26 +3124,30 @@ function toast(msg, ms){
   toast._t = setTimeout(()=>el.classList.remove('on'), ms||3400);
 }
 function refreshHUD(){
-  els('telPwr').textContent = installed+' / 6';
-  const pips = els('pips');
-  for(let i=0;i<6;i++) pips.children[i].classList.toggle('on', i < installed);
-  const remaining = 6 - installed - carried;
   if(won){
-    els('objTxt').textContent = 'Power restored';
-    els('objSub').textContent = 'Stand under the oculus.';
-  } else if(carried > 0){
-    els('objTxt').textContent = 'Return to the breaker';
-    els('objSub').textContent = carried+' cell'+(carried>1?'s':'')+' in hand · '+remaining+' still out there';
+    els('objTxt').textContent = 'Out.';
+    els('objSub').textContent = 'You made it to the garden. Keep walking.';
   } else {
-    els('objTxt').textContent = 'Find the fuse cells';
-    els('objSub').textContent = remaining+' of 6 still out there';
+    els('objTxt').textContent = 'Get out of the house';
+    els('objSub').textContent = 'Find a way out. You are not alone in here.';
   }
 }
+// rough "am I standing in light?" proxy — eases dread near a live flame/lamp
+function sectorLit(){
+  let best = 0;
+  for(let i=0;i<lights.length;i++){
+    const L = lights[i]; if(L.lit < 0.15) continue;
+    const d2 = (L.x-PL.x)*(L.x-PL.x) + (L.z-PL.z)*(L.z-PL.z);
+    if(d2 < 25){ best = Math.max(best, L.lit * (1 - Math.sqrt(d2)/5)); }
+  }
+  return clamp(best, 0, 1);
+}
 function sectorName(){
-  if(PL.x > 18.4) return 'GENERATOR ROOM';
-  if(PL.y > 4.5) return 'UPPER GALLERY';
-  if(Math.hypot(PL.x,PL.z) < 5.0) return 'THE OCULUS';
-  return 'ATRIUM';
+  const x=PL.x, z=PL.z;
+  if(PL.y > 2.6) return 'UPSTAIRS';
+  if(z > 16){ return x<-9?'LIBRARY': x>9?'DINING ROOM':'ENTRANCE FOYER'; }
+  if(z > -2){ return x<-9?'DRAWING ROOM': x>9?'STUDY':'GREAT HALL'; }
+  return x<-9?'KITCHEN': x>9?'BALLROOM':'REAR HALL';
 }
 
 /* interaction target under the crosshair */
@@ -3288,7 +3210,8 @@ const GH = {
   state:'dormant',      // dormant | manifest | stalk | charge | scare
   x:0, y:0, z:0, yaw:0,
   manifest:0, charge:0, scare:0, present:false,
-  cd: 26,               // seconds to the first appearance
+  cd: 12,               // seconds to the first appearance (it comes quickly)
+  floor: 0,             // storey height the ghost rises at
   stateT: 0, seenT: 0, shake: 0, lock: 0, seed: 1, scares: 0
 };
 const GHCOL = { x:0,y:0,z:0 };
@@ -3301,21 +3224,23 @@ function playerLooksAt(px,pz){
 }
 // a standable-ish spawn: on a ring around the player, off to the side/behind
 function ghChooseSpawn(){
-  const R0 = 8.5 + Math.random()*5;
   let best=null;
-  for(let k=0;k<14;k++){
-    const a = PL.yaw + (Math.random()<0.5?1:-1)*(0.7+Math.random()*1.9);  // 40°..150° off view
+  for(let k=0;k<20;k++){
+    const R0 = 6.5 + Math.random()*6;
+    const a = PL.yaw + (Math.random()<0.5?1:-1)*(0.6+Math.random()*2.2);  // 35°..160° off view
     const x = PL.x + Math.sin(a)*R0, z = PL.z - Math.cos(a)*R0;
-    if(x<-17||x>17||z<-14||z>14) continue;                 // stay in the atrium
-    if(hits(x, 0.1, z, 0.4, 1.6)) continue;                // not inside a pillar/prop
+    if(x<MX0+1||x>MX1-1||z<MZ0+1||z>MZ1-1) continue;       // stay inside the house
+    if(hits(x, PL.y+0.1, z, 0.4, 1.6)) continue;          // not embedded in a wall/prop
     best = {x,z}; break;
   }
-  if(!best){ best = { x: PL.x - Math.sin(PL.yaw)*9, z: PL.z + Math.cos(PL.yaw)*9 }; }
+  if(!best){ best = { x: clamp(PL.x - Math.sin(PL.yaw)*7,MX0+1,MX1-1),
+                      z: clamp(PL.z + Math.cos(PL.yaw)*7,MZ0+1,MZ1-1) }; }
   return best;
 }
 function ghManifest(force){
   const s = ghChooseSpawn();
-  GH.x = s.x; GH.z = s.z; GH.y = -0.35;
+  GH.floor = PL.y;                        // rise at the player's storey (works upstairs too)
+  GH.x = s.x; GH.z = s.z; GH.y = GH.floor - 0.35;
   GH.state='manifest'; GH.manifest=0; GH.charge=0; GH.scare=0; GH.stateT=0; GH.seenT=0;
   GH.present=true; GH.seed = 1+Math.floor(Math.random()*97);
   SFX.whisper(); SFX.breath();
@@ -3347,65 +3272,60 @@ function updateGhost(dt){
   switch(GH.state){
   case 'dormant': {
     GH.present = false; GH.manifest = lerp(GH.manifest, 0, clamp(dt*3,0,1));
-    // haunts come faster the darker it is, the more power is on, the more afraid you are
-    const rate = 1 + dread*0.9 + installed*0.22 + (PL.lamp?0:0.4);
+    // it comes faster the darker it is and the more afraid you already are
+    const rate = 1.5 + dread*1.4 + (PL.lamp && PL.batt>0 ? 0 : 0.7);
     GH.cd -= dt*rate;
     if(GH.cd <= 0 && !won) ghManifest();
     break;
   }
   case 'manifest': {
     GH.stateT += dt;
-    GH.manifest = clamp(GH.manifest + dt/1.6, 0, 1);
-    GH.y = lerp(GH.y, 0.0, clamp(dt*1.5,0,1));          // rises out of the water
-    // face the player
+    GH.manifest = clamp(GH.manifest + dt/1.3, 0, 1);
+    GH.y = lerp(GH.y, GH.floor, clamp(dt*1.6,0,1));     // rises out of the floor
     GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
     if(GH.manifest >= 1){ GH.state='stalk'; GH.stateT=0; }
-    if(whisperT>1.2 && Math.random()<dt*0.6){ SFX.whisper(); whisperT=0; }
+    if(whisperT>1.0 && Math.random()<dt*0.8){ SFX.whisper(); whisperT=0; }
     break;
   }
   case 'stalk': {
     GH.stateT += dt;
     GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
-    // drift toward the player, slowly, hovering just out of reach
     const dx=PL.x-GH.x, dz=PL.z-GH.z, d=Math.hypot(dx,dz)||1;
-    const want = 3.4;                                   // hovers ~3.4 m away
-    const spd = 0.9 + dread*0.6;
+    const want = 2.8;
+    const spd = 1.4 + dread*1.1;                        // closes faster than before
     if(d > want){ GH.x += dx/d*spd*dt; GH.z += dz/d*spd*dt; }
-    GH.y = 0.02*Math.sin(now*1.6);
-    // dread from proximity
-    // does the player have it lit and centred? staring it down provokes it
+    GH.y = GH.floor + 0.03*Math.sin(now*1.8);
     const look = playerLooksAt(GH.x, GH.z);
-    const litOnIt = (PL.lamp && PL.batt>0 && look>0.86 && dist<11);
-    GH.seenT = clamp(GH.seenT + (litOnIt?1:-1.4)*dt, 0, 3);
-    if(whisperT>3 && Math.random()<dt*0.4){ SFX.whisper(); whisperT=0; }
-    // provocations: staring it down, letting it too close, or a slow-burn roll
-    const aggro = GH.seenT>1.1 || dist<2.6 || (GH.stateT>4 && Math.random()<dt*(0.05+dread*0.15));
+    const litOnIt = (PL.lamp && PL.batt>0 && look>0.85 && dist<12);
+    GH.seenT = clamp(GH.seenT + (litOnIt?1:-1.2)*dt, 0, 3);
+    if(whisperT>2.2 && Math.random()<dt*0.6){ SFX.whisper(); whisperT=0; }
+    // provoked sooner: a stare, proximity, or an impatient roll
+    const aggro = GH.seenT>0.8 || dist<2.4 || (GH.stateT>2.5 && Math.random()<dt*(0.12+dread*0.28));
     if(aggro){ GH.state='charge'; GH.stateT=0; GH.charge=0; SFX.whoosh(); SFX.setSub(1); }
-    else if(GH.stateT>16){ GH.state='dormant'; GH.cd = 14+Math.random()*16; SFX.setSub(0); }  // it withdraws
+    else if(GH.stateT>13){ GH.state='dormant'; GH.cd = 7+Math.random()*9; SFX.setSub(0); }
     break;
   }
   case 'charge': {
     GH.stateT += dt;
-    GH.charge = clamp(GH.charge + dt*2.2, 0, 1);
+    GH.charge = clamp(GH.charge + dt*2.4, 0, 1);
     GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
     const dx=PL.x-GH.x, dz=PL.z-GH.z, d=Math.hypot(dx,dz)||1;
-    const spd = 7.5 + GH.stateT*4.0;                    // accelerates at you
+    const spd = 8.5 + GH.stateT*4.5;                    // it lunges
     GH.x += dx/d*spd*dt; GH.z += dz/d*spd*dt;
-    GH.y = lerp(GH.y, 0.0, clamp(dt*3,0,1));
-    if(d < 1.35 || GH.stateT > 1.25){ ghTriggerScare(); SFX.setSub(0); }
+    GH.y = lerp(GH.y, GH.floor, clamp(dt*3,0,1));
+    if(d < 1.35 || GH.stateT > 1.15){ ghTriggerScare(); SFX.setSub(0); }
     break;
   }
   case 'scare': {
     GH.stateT += dt;
     GH.scare = Math.max(0, 1 - GH.stateT/0.5);          // flash fully clears in 0.5s
-    // hold at point-blank, filling the view, then vanish
     const dx=PL.x-GH.x, dz=PL.z-GH.z, d=Math.hypot(dx,dz)||1;
-    GH.x = PL.x - dx/d*0.9; GH.z = PL.z - dz/d*0.9; GH.y = 0.0;
+    GH.x = PL.x - dx/d*0.9; GH.z = PL.z - dz/d*0.9; GH.y = GH.floor;
     GH.yaw = Math.atan2(PL.x-GH.x, -(PL.z-GH.z));
     if(GH.stateT > 0.55){
       GH.state='dormant'; GH.present=false; GH.manifest=0;
-      GH.scare = 0; GH.charge = 0; GH.shake = 0;         // clear every scare residue
-      GH.cd = 20 + Math.random()*22;                    // a breather before the next one
+      GH.scare = 0; GH.charge = 0; GH.shake = 0;
+      GH.cd = 10 + Math.random()*12;                    // a short breather, then again
     }
     break;
   }
@@ -3519,35 +3439,17 @@ function updateLights(dt){
 /* ---- everything that moves, rebuilt as instances each frame ---- */
 function buildDynamic(){
   clearDynamic();
-  // lamp glass, brightening with its bulb
-  for(const L of lights){
-    if(!L.glass || L.lit < 0.01) continue;
-    const e = L.lit * L.i * 0.30;
-    addDyn('boxr', L.glass.x, L.glass.y, L.glass.z, 0, L.glass.ry, 0, 0.20, 0.09, 0.17,
-           MAT.GLASS, {uv:3, emissive:e, tint:[1.0,0.55,0.22], rough:0.4, seed:3});
-  }
-  // loose fuse cells
-  for(const c of cells){
-    if(c.taken) continue;
-    const bob = Math.sin(now*1.35 + c.bob)*0.035;
-    const spin = now*0.55 + c.spin;
-    addDyn('boxr', c.x, c.y+0.16+bob, c.z, 0, spin, 0, 0.062,0.125,0.062, MAT.STEEL,
-           {uv:5, tint:[0.6,0.63,0.66], seed:11});
-    addDyn('cyl',  c.x, c.y+0.16+bob, c.z, 0, spin, 0, 0.040,0.095,0.040, MAT.GLASS,
-           {uv:5, emissive: 1.75+Math.sin(now*2.4+c.bob)*0.35, tint:[0.32,0.80,1.0], seed:12});
-    addDyn('tor',  c.x, c.y+0.16+bob, c.z, Math.PI/2, spin*1.7, 0, 0.115,0.115,0.115, MAT.COPPER,
-           {uv:6, tint:[0.9,0.95,1.0], seed:13});
-  }
-  // seated cells glowing in the breaker face
-  for(let i=0;i<installed;i++){
-    addDyn('boxr', -0.7+i*0.28, 1.62, -0.735, 0,0,0, 0.075, 0.11, 0.022, MAT.GLASS,
-           {uv:6, emissive: 2.4 + Math.sin(now*3.0+i)*0.25, tint:[1.0,0.62,0.22], seed:20+i});
-  }
-  // generator-room status lamps come alive with bank 4
-  if(installed > 4){
-    for(let i=0;i<4;i++) for(let k=0;k<3;k++)
-      addDyn('boxr', 21.0+i*1.6-0.35+k*0.35, 1.05, 5.20, 0,0,0, 0.045,0.045,0.02, MAT.GLASS,
-             {uv:8, emissive: 1.6, tint: k===0?[0.3,1,0.4]:(k===1?[1,0.7,0.2]:[1,0.3,0.25]), seed:30+i*3+k});
+  // live flames — fire, candles, sconces. Small emissive spheres that gutter,
+  // dimmed by the blackout so the whole house can drop dark.
+  const bo = 1 - blackout*0.92;
+  for(let i=0;i<flames.length;i++){
+    const f = flames[i];
+    const fl = (0.6 + 0.4*Math.sin(now*(9+i%5) + i) + 0.25*Math.sin(now*23.0 + i*1.7)) * bo;
+    if(fl < 0.05) continue;
+    const s = f.s * (0.8 + 0.3*fl);
+    const sway = f.big ? Math.sin(now*3.1+i)*0.02 : Math.sin(now*5.0+i)*0.01;
+    addDyn('sph', f.x+sway, f.y + (f.big?0.1:0.04)*fl, f.z, 0,0,0, s, s*(f.big?1.7:1.5), s,
+           MAT.GLASS, {uv:4, emissive: (f.big?2.8:1.5)*fl, tint:[1.0, 0.42+0.12*fl, 0.14], rough:0.4, seed:i+1});
   }
   uploadDynamic();
 }
@@ -3583,10 +3485,11 @@ function render(dt){
   m4.invert(M.invProj, M.projJ);
   m4.invert(M.invView, M.view);
 
-  /* ---- moon shadow (static rig, but re-rendered so props stay in sync) ---- */
-  const cxs = 2, cys = 7, czs = 0;
-  m4.lookAt(M.sunView, cxs+SUN[0]*48, cys+SUN[1]*48, czs+SUN[2]*48, cxs,cys,czs, 0,1,0);
-  m4.ortho(M.sunProj, -40,40, -34,34, 0.5, 100);   // must enclose the generator wing too
+  /* ---- moon shadow: follows the player so the whole mansion stays covered
+          at a usable texel density (a fixed box over 56x46 m would be mush) ---- */
+  const cxs = clamp(PL.x,-22,22), cys = 3, czs = clamp(PL.z,-16,22);
+  m4.lookAt(M.sunView, cxs+SUN[0]*60, cys+SUN[1]*60, czs+SUN[2]*60, cxs,cys,czs, 0,1,0);
+  m4.ortho(M.sunProj, -26,26, -24,24, 0.5, 130);
   m4.mul(M.sunVP, M.sunProj, M.sunView);
 
   /* ---- flashlight rig, trailing the head slightly ---- */
@@ -3778,7 +3681,7 @@ function render(dt){
   u3f(rp,'uRight',rx,0,rz);
   u3f(rp,'uUp',0,1,0);
   u1f(rp,'uTime',now);
-  u4f(rp,'uShaft',0,0,6.6, CEIL+1.6);
+  u4f(rp,'uShaft', 2.0, 7.0, 3.6, HALL_H);        // a leak through the great-hall roof
   u1f(rp,'uStreak',0.55);
   u1f(rp,'uPxScale', 2.0*Math.tan(fov*0.5)/H);   // world units per pixel per unit depth
   u3f(rp,'uSpotPos',SPOT.px,SPOT.py,SPOT.pz);
@@ -3913,40 +3816,52 @@ function loop(t){
     }
     flash = Math.max(0, flash - dt*(4.5 + flash*3.0));
 
-    // rain gets louder under the oculus
-    SFX.setRain(0.45 + 0.55*(1 - clamp(Math.hypot(PL.x,PL.z)/13, 0, 1)) * (PL.x>18.4?0.25:1));
+    // storm heard against the windows, everywhere
+    SFX.setRain(0.55);
 
-    targetExposure = 1.45 / (1 + installed*0.185);
+    // the mansion is dark; the flashlight is your only real light
+    targetExposure = 1.72;
     exposure = lerp(exposure, targetExposure, clamp(dt*0.55,0,1));
 
-    // ---- the haunting ----
+    // ---- ESCAPE ----
+    if(!won && exitZone){
+      const d = Math.hypot(PL.x-exitZone.x, PL.z-exitZone.z);
+      if(d < exitZone.r){
+        won = true; refreshHUD();
+        toast('The doors give. Cold air. You run.', 6000);
+        GH.state='dormant'; GH.present=false;
+        setTimeout(()=>{ els('done').classList.add('on'); }, 2200);
+      }
+    }
+
+    // ---- the haunting (mansion tuning: darker, hungrier) ----
     updateGhost(dt);
     whisperT += dt;
 
-    // dread rises in the dark and with the apparition near; eases down when safe
-    const litSafety = clamp(installed/6*0.45 + (PL.lamp && PL.batt>0 ? 0.30 : 0), 0, 0.75);
-    let dt2 = (1 - litSafety) * 0.28;
-    if(GH.present) dt2 = Math.max(dt2, clamp(1 - ghDist()/12, 0, 1)*0.85);
+    // With no power to restore, darkness alone drives dread; the lamp is a thin
+    // comfort. Baseline unease is higher than the observatory ever was.
+    const litSafety = clamp((PL.lamp && PL.batt>0 ? 0.26 : 0) + (sectorLit()*0.18), 0, 0.5);
+    let dt2 = (1 - litSafety) * 0.44 + 0.10;
+    if(GH.present) dt2 = Math.max(dt2, clamp(1 - ghDist()/13, 0, 1)*0.95);
     if(GH.state==='charge') dt2 = 1;
     dreadTarget = clamp(dt2, 0, 1);
-    // fear spikes fast, ebbs slow
-    dread = lerp(dread, dreadTarget, clamp(dt*(dreadTarget>dread?2.4:0.5),0,1));
+    dread = lerp(dread, dreadTarget, clamp(dt*(dreadTarget>dread?2.6:0.45),0,1));
     SFX.setDread(dread);
     SFX.setSub(GH.state==='charge' ? 1 : (GH.state==='scare'?0.6:0));
 
-    // heartbeat, faster and louder the more afraid you are
-    if(dread > 0.22){
-      hbPhase += dt*(0.9 + dread*1.9);
-      if(hbPhase >= 1){ hbPhase -= 1; SFX.heartbeat(clamp(dread*1.1,0.2,1)); }
+    if(dread > 0.18){
+      hbPhase += dt*(0.9 + dread*2.2);
+      if(hbPhase >= 1){ hbPhase -= 1; SFX.heartbeat(clamp(dread*1.15,0.2,1)); }
     } else hbPhase = 0;
 
-    // ambient blackouts once you are properly rattled
+    // blackouts — more frequent in the mansion, and the deeper the dread the worse
     blackout = Math.max(0, blackout - dt*3.2);
-    if(GH.state!=='scare' && dread>0.5 && Math.random() < dt*(0.05+dread*0.15)){
-      blackout = 0.6 + Math.random()*0.4; SFX.click();
+    if(GH.state!=='scare' && dread>0.4 && Math.random() < dt*(0.08+dread*0.22)){
+      blackout = 0.5 + Math.random()*0.5; SFX.click();
     }
-    // ragged breathing in the dark
-    if(dread>0.35 && Math.random() < dt*0.5) SFX.breath();
+    if(dread>0.3 && Math.random() < dt*0.6) SFX.breath();
+    // disembodied whispers drifting through the rooms
+    if(whisperT>2.2 && Math.random() < dt*(0.15+dread*0.5)){ SFX.whisper(); whisperT=0; }
 
     updateLights(dt);
     buildDynamic();
@@ -4174,13 +4089,13 @@ window.__PEN = {
   // ground-floor collision audit: flood fill from spawn, report traps + unreachable targets
   audit(){
     const hw=PL.hw, hS=PL.hStand, step=0.25;
-    const X0=-19, X1=34, Z0=-16, Z1=16;
+    const X0=MX0, X1=MX1, Z0=MZ0, Z1=MZ1;
     const nx=Math.round((X1-X0)/step), nz=Math.round((Z1-Z0)/step);
     const id=(i,j)=>i*nz+j;
     const stand=new Uint8Array(nx*nz);
     for(let i=0;i<nx;i++) for(let j=0;j<nz;j++)
       stand[id(i,j)] = hits(X0+i*step, 0.06, Z0+j*step, hw, hS) ? 0 : 1;
-    const si=Math.round((0-X0)/step), sj=Math.round((12.5-Z0)/step);
+    const si=Math.round((0-X0)/step), sj=Math.round((23-Z0)/step);
     const seen=new Uint8Array(nx*nz); const q=[[si,sj]]; seen[id(si,sj)]=1;
     while(q.length){ const [i,j]=q.pop();
       for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){
@@ -4192,20 +4107,19 @@ window.__PEN = {
       for(let r=0;r<=8;r++) for(let di=-r;di<=r;di++) for(let dj=-r;dj<=r;dj++){
         const a=ci+di,b=cj+dj; if(a<0||b<0||a>=nx||b>=nz) continue;
         if(stand[id(a,b)]&&seen[id(a,b)]) return true; } return false; };
-    const tg=[];
-    cells.forEach(c=> tg.push({where:c.where, ok:reach(c.x,c.z)}));
-    tg.push({where:'BREAKER', ok:reach(0,2.6)});
-    tg.push({where:'GENERATOR', ok:reach(26,0)});
+    const tg=[
+      ['FOYER',0,21],['LIBRARY',-18,20],['DINING',18,21],['GREAT HALL',3,8],
+      ['DRAWING',-18,7],['STUDY',18,7],['REAR HALL',0,-11],['KITCHEN',-18,-11],
+      ['BALLROOM',18,-11],['EXIT',exitZone.x-2,exitZone.z]
+    ].map(t=>({where:t[0], ok:reach(t[1],t[2])}));
     let sc=0, rc=0; for(let k=0;k<stand.length;k++){ sc+=stand[k]; rc+=seen[k]; }
     return { grid:[nx,nz], standableCells:sc, reachableFromSpawn:rc,
              unreachableTargets: tg.filter(t=>!t.ok) };
   }
 };
 
-/* pips + go */
+/* go */
 (function(){
-  const pips = els('pips');
-  for(let i=0;i<6;i++) pips.appendChild(document.createElement('span'));
   if(!gl) return;
   bindInput();
   boot();
