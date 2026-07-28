@@ -44,6 +44,9 @@ body.locked{cursor:none}
 #tel .k{color:var(--dim)}
 #tel .v{color:var(--bone)}
 #tel .hi{color:var(--amber)}
+#mini{position:absolute;right:22px;top:22px;width:170px;height:170px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.28);box-shadow:0 6px 24px rgba(0,0,0,.4);background:rgba(20,30,20,.35)}
+#stam{position:absolute;right:24px;bottom:20px;width:96px;height:96px}
 
 /* flashlight battery */
 #bat{position:absolute;left:26px;bottom:96px;width:132px}
@@ -147,18 +150,19 @@ button:disabled{background:#2a3438;color:#6c797d;cursor:default;transform:none;b
 
 <div id="hud">
   <div id="frame"></div>
-  <div id="xh"><b></b><i></i></div>
   <div id="obj">
-    <div class="cap">BLACKMARSH MANOR</div>
-    <div class="txt" id="objTxt">Get out of the house</div>
-    <div class="sub" id="objSub">Find a way out. You are not alone in here.</div>
+    <div class="cap">THE GREEN EXPANSE</div>
+    <div class="txt" id="objTxt">Explore the expanse</div>
+    <div class="sub" id="objSub">Raise the towers · seek the shrines · go anywhere</div>
   </div>
-  <div id="bat"><div class="lbl">LAMP CELL</div><div class="trk"><i class="fil"></i></div></div>
+  <canvas id="mini" width="180" height="180"></canvas>
   <div id="tel">
-    <div><span class="k">ROOM</span> <span class="v" id="telSec">FOYER</span></div>
-    <div><span class="k">FPS </span> <span class="v" id="telFps">--</span></div>
+    <div><span class="k">REGION </span> <span class="v" id="telSec">THE MEADOWS</span></div>
+    <div><span class="k">FOUND  </span> <span class="hi" id="telSec2">0 / 9</span></div>
+    <div><span class="k">SEEDS  </span> <span class="v" id="telSeed">0</span></div>
+    <div><span class="k">FPS    </span> <span class="v" id="telFps">--</span></div>
   </div>
-  <div id="prompt"><span class="key" id="pKey">E</span><span class="act" id="pAct">Take</span></div>
+  <canvas id="stam" width="120" height="120"></canvas>
   <div id="log"></div>
 </div>
 
@@ -204,7 +208,7 @@ button:disabled{background:#2a3438;color:#6c797d;cursor:default;transform:none;b
   <button id="btnStart" disabled>Compiling shaders…</button>
   <div class="opts">
     <span>QUALITY</span>
-    <span class="seg" id="segQ"><i data-q="0">LOW</i><i data-q="1">HIGH</i><i data-q="2" class="sel">ULTRA</i></span>
+    <span class="seg" id="segQ"><i data-q="0">LOW</i><i data-q="1" class="sel">HIGH</i><i data-q="2">ULTRA</i></span>
     <span class="seg" id="segR"><i data-r="0.7">70%</i><i data-r="0.85">85%</i><i data-r="1" class="sel">100%</i></span>
   </div>
   <div class="err" id="err" style="display:none"></div>
@@ -716,6 +720,38 @@ function geoBillboard(){
               [0,0,1, 0,0,1, 0,0,1, 0,0,1], [0,1,2, 0,2,3]);
 }
 
+/* a cone (trunk-cap / tree / spire) — radius 1 at base y=-1, point at y=1 */
+function geoCone(rs){
+  rs=rs||16; const pos=[],nrm=[],idx=[];
+  const slope=1/Math.hypot(2,1);
+  for(let i=0;i<=rs;i++){ const a=i/rs*TAU, c=Math.cos(a), s=Math.sin(a);
+    pos.push(c,-1,s); nrm.push(c*slope,0.5*slope,s*slope);
+    pos.push(0,1,0);  nrm.push(c*slope,0.5*slope,s*slope); }
+  for(let i=0;i<rs;i++){ const a=i*2; idx.push(a,a+1,a+2); }
+  const b=pos.length/3; pos.push(0,-1,0); nrm.push(0,-1,0);
+  for(let i=0;i<=rs;i++){ const a=i/rs*TAU; pos.push(Math.cos(a),-1,Math.sin(a)); nrm.push(0,-1,0); }
+  for(let i=0;i<rs;i++) idx.push(b, b+1+i, b+2+i);
+  return mesh(pos,nrm,idx);
+}
+
+/* the terrain heightfield — one big mesh sampled from terrainH(), smooth normals.
+   res = grid cells per side across the whole [-WORLD,WORLD] span. */
+function geoTerrain(res){
+  const N=res, span=2*WORLD, step=span/N;
+  const P=new Float32Array((N+1)*(N+1)*3), NR=new Float32Array((N+1)*(N+1)*3);
+  const idxArr=[];
+  for(let j=0;j<=N;j++) for(let i=0;i<=N;i++){
+    const x=-WORLD+i*step, z=-WORLD+j*step, o=(j*(N+1)+i)*3;
+    P[o]=x; P[o+1]=terrainH(x,z); P[o+2]=z;
+    const n=terrainNormal(x,z); NR[o]=n[0]; NR[o+1]=n[1]; NR[o+2]=n[2];
+  }
+  for(let j=0;j<N;j++) for(let i=0;i<N;i++){
+    const a=j*(N+1)+i, b=a+1, c=a+N+1, d=c+1;
+    idxArr.push(a,c,b, b,c,d);        // CCW up-facing
+  }
+  return mesh(P, NR, idxArr);
+}
+
 /* THE APPARITION — a gaunt hooded figure, feet at y=0, crown near y=1.72.
    Built from lofted tubes + a head sphere; normals are accumulated from the
    faces so it doesn't matter that the shroud winds inconsistently (it renders
@@ -1129,47 +1165,46 @@ void main(){
 /* ---------- sky / environment ---------------------------------------------- */
 const SKYFN = `
 uniform float uSkyTime;
-uniform float uFlash;          // lightning 0..1
-// Moon disc sharpness. The visible sky wants a tight disc; the IBL probe must
-// not, because an unfiltered near-delta highlight reflected off water at
-// grazing Fresnel turns any normal jitter into binary speckle. Prefiltering IS
-// widening this lobe.
-uniform float uDiscPow;        // 220 for the screen, ~22 for the probe
+uniform float uFlash;          // unused now (kept so old call sites still link)
+uniform float uDiscPow;        // sun disc sharpness (sharp on screen, soft in the IBL probe)
 uniform float uDiscAmp;
-// blur: 0 = sharp (screen background), 1 = fully diffuse (last env mip).
-// The lobe is widened analytically instead of box-filtering a mip chain, which
-// keeps the moon from turning into a square of averaged texels.
+uniform vec3  uSunDirSky;      // world-space sun direction
+// A bright, clear daytime sky in the Breath-of-the-Wild register: deep cobalt
+// zenith, pale hazy horizon, a warm sun with a soft glow and drifting cumulus.
+// blur: 0 = crisp (screen), 1 = fully diffuse (last env mip / ambient).
 vec3 skyColor(vec3 d, float blur, out float sunDisc){
   d = normalize(d);
   float up = clamp(d.y,-1.0,1.0);
-  float discPow = mix(uDiscPow, 3.5, blur);
+  float discPow = mix(uDiscPow, 4.0, blur);
   int  cOct = int(mix(6.0, 2.0, blur));
-  // storm gradient: bruised indigo overhead, sodium haze on the horizon
-  vec3 zen  = vec3(0.0075,0.0125,0.0215);
-  vec3 hor  = vec3(0.0295,0.0330,0.0405);
-  vec3 base = mix(hor, zen, pow(clamp(up,0.0,1.0),0.55));
-  base = mix(base, vec3(0.050,0.0305,0.0165), pow(1.0-abs(up),12.0)*0.85); // distant town glow
-  // moon behind the cloud deck
-  vec3 md = normalize(vec3(-0.30,0.80,0.52));
-  float mo = max(dot(d,md),0.0);
-  base += vec3(0.36,0.44,0.52)*pow(mo,discPow)*mix(uDiscAmp,0.85,blur);  // disc
-  base += vec3(0.085,0.115,0.150)*pow(mo,mix(7.0,1.6,blur));        // halo
-  sunDisc = pow(mo,discPow);
-  // two scrolling cloud decks, thick and low
-  vec2 cp = d.xz/max(abs(up)+0.16,0.14);
-  float c1 = fbm(cp*0.55 + vec2(uSkyTime*0.010, uSkyTime*0.004), cOct);
-  float c2 = fbm(cp*1.60 + vec2(-uSkyTime*0.021, uSkyTime*0.013), max(cOct-1,1));
-  float cov = smoothstep(0.34,0.80, c1*0.72+c2*0.38);
-  cov = mix(cov, 0.62, blur);
-  vec3 cloudLit = vec3(0.052,0.061,0.076)*(0.25+0.95*pow(max(dot(d,md),0.0),2.2));
-  vec3 cloudDark= vec3(0.0125,0.0155,0.0215);
-  vec3 cloud = mix(cloudDark, cloudLit, smoothstep(0.30,0.95,c1));
-  base = mix(base, cloud, cov*clamp(up*2.6+0.35,0.0,1.0));
-  // stars only where the deck is thin (and never in the blurred mips)
-  float sh = hash12(floor(d.xz*260.0/max(up,0.08)));
-  base += vec3(0.55,0.62,0.72)*step(0.9985,sh)*(1.0-cov)*clamp(up,0.0,1.0)*0.9*(1.0-blur);
-  // lightning fills the whole deck
-  base += vec3(0.42,0.52,0.68)*uFlash*(0.35+cov*1.5);
+  vec3 sd3 = normalize(uSunDirSky);
+  float su = max(dot(d, sd3), 0.0);
+
+  // gradient — richer blue overhead, warm pale haze at the horizon
+  vec3 zen = vec3(0.16, 0.34, 0.66);
+  vec3 hor = vec3(0.72, 0.80, 0.86);
+  float t = pow(clamp(up,0.0,1.0), 0.55);
+  vec3 base = mix(hor, zen, t);
+  // warm the horizon toward the sun
+  base = mix(base, vec3(0.95,0.82,0.62), pow(1.0-abs(up),6.0)*0.5*smoothstep(-0.2,0.4,dot(normalize(vec3(d.x,0.0,d.z)), normalize(vec3(sd3.x,0.0,sd3.z)))));
+
+  // sun disc + broad glow
+  sunDisc = pow(su, discPow);
+  base += vec3(1.6,1.4,1.05)*sunDisc*mix(uDiscAmp,1.0,blur);
+  base += vec3(1.0,0.82,0.55)*pow(su, mix(80.0,6.0,blur))*0.5;
+  base += vec3(0.55,0.6,0.62)*pow(su, 3.0)*0.25;
+
+  // drifting cumulus — soft white, lit warm on the sun side
+  vec2 cp = d.xz/max(abs(up)+0.12,0.10);
+  float c1 = fbm(cp*0.42 + vec2(uSkyTime*0.006, uSkyTime*0.003), cOct);
+  float c2 = fbm(cp*1.10 + vec2(-uSkyTime*0.011, uSkyTime*0.008), max(cOct-1,1));
+  float cov = smoothstep(0.42, 0.86, c1*0.7 + c2*0.4);
+  cov *= clamp(up*3.0+0.15, 0.0, 1.0);            // clouds only above the horizon
+  vec3 cloudLit = mix(vec3(0.85,0.87,0.92), vec3(1.15,1.02,0.85), pow(su,1.5)*0.6);
+  vec3 cloudDark= vec3(0.42,0.47,0.56);
+  vec3 cloud = mix(cloudDark, cloudLit, smoothstep(0.35,0.95,c1));
+  base = mix(base, cloud, cov*0.9);
+
   return base;
 }
 `;
@@ -1192,14 +1227,11 @@ void main(){
   vec3 d = normalize(faceDir(uFace, vUV));
   float sd;
   vec3 sky = skyColor(d, uRough, sd);
-  // The player is indoors: only steeply upward directions actually see the hole
-  // in the dome. Everything else reflects the room — dark stone with a faint
-  // sodium bounce off the flooded floor.
-  // A hard room/sky boundary here becomes speckle on the water, because a
-  // grazing reflection vector swings across it from pixel to pixel. Keep it wide.
-  float hole = smoothstep(0.05, 0.92, d.y) * mix(1.0, 0.55, uRough);
-  vec3 room  = mix(vec3(0.0085,0.0105,0.0125), vec3(0.0165,0.0125,0.0082), smoothstep(0.1,-0.7,d.y));
-  o = vec4(mix(room, sky, hole), 1.0);
+  // below the horizon: fade to a hazy green-grey ground colour so reflections
+  // and ambient have something warm underneath
+  vec3 ground = vec3(0.24,0.30,0.20);
+  float horizon = smoothstep(-0.12, 0.06, d.y);
+  o = vec4(mix(ground, sky, horizon), 1.0);
 }
 `;
 
@@ -1246,6 +1278,7 @@ uniform sampler2DArray uNrm;
 uniform vec3 uCam;
 uniform float uTime;
 uniform float uWetness;
+uniform float uWaterY;
 uniform int uGDebug;   // 1 = pack matId into oAlb.a for the harness
 layout(location=0) out vec4 oAlb;   // linear albedo, roughness  (SRGB8_ALPHA8)
 layout(location=1) out vec4 oNrm;   // world normal, metalness   (RGBA16F)
@@ -1253,6 +1286,7 @@ layout(location=2) out vec4 oEmi;   // emissive, ao              (RGBA16F)
 layout(location=3) out vec2 oVel;   // screen velocity           (RG16F)
 
 const float WATER_ID = 64.0;
+const float TERRAIN_ID = 32.0;
 
 // Rain rings on standing water: one hash grid, each cell firing on its own
 // clock. Deliberately low frequency — a mirror-smooth surface carrying a very
@@ -1324,6 +1358,38 @@ void main(){
     // returns noise; the lighting pass uses this flag to skip AO here.
     oNrm = vec4(N, -1.0);
     oEmi = vec4(0.0,0.0,0.0, ao);
+  } else if(matId > TERRAIN_ID-0.5 && matId < WATER_ID-0.5){
+    // ---- open-world terrain: blend grass / rock / sand / snow by slope+height
+    vec3 wp = vWP;
+    float slope = 1.0 - clamp(N.y, 0.0, 1.0);          // 0 flat .. 1 cliff
+    float h = wp.y;
+    // detail noise (two scales) — keep gentle so it doesn't alias at distance
+    float n1 = fbm(wp.xz*0.09, 4);
+    float n2 = fbm(wp.xz*0.6 + 20.0, 3);
+    // palette
+    vec3 grassA = vec3(0.14,0.34,0.10), grassB = vec3(0.24,0.44,0.13);
+    vec3 grass  = mix(grassA, grassB, n1) + (n2-0.5)*0.05;
+    vec3 dirt   = vec3(0.26,0.19,0.11);
+    vec3 rock   = mix(vec3(0.30,0.29,0.27), vec3(0.40,0.37,0.33), n2);
+    vec3 sand   = vec3(0.66,0.58,0.40);
+    vec3 snow   = vec3(0.86,0.90,0.97);
+    // masks
+    float sandM = smoothstep(1.6, 0.2, h - uWaterY);                 // beaches near water
+    float rockM = smoothstep(0.42, 0.72, slope + (n2-0.5)*0.25);     // cliffs
+    float snowM = smoothstep(26.0, 34.0, h + (n1-0.5)*8.0) * (1.0-rockM*0.4);
+    vec3 col = grass;
+    col = mix(col, dirt, smoothstep(0.55,0.5,n1)*0.25);              // worn dirt patches
+    col = mix(col, sand, sandM);
+    col = mix(col, rock, rockM);
+    col = mix(col, snow, snowM);
+    float rgh = mix(0.92, 0.7, rockM);
+    rgh = mix(rgh, 0.55, snowM);
+    // a touch of geometric normal detail on grass (not on cliffs — avoids acne)
+    float det = (fbm(wp.xz*1.3, 2)-0.5) * (1.0-rockM) * 0.15;
+    N = normalize(N + vec3(det, 0.0, det*0.7));
+    oAlb = vec4(col, rgh);
+    oNrm = vec4(N, 0.0);
+    oEmi = vec4(0.0,0.0,0.0, 1.0);
   } else {
     // ---- triplanar PBR ------------------------------------------------------
     float s = vPar.y*0.5;
@@ -2259,12 +2325,12 @@ void main(){
    RENDERER
    ========================================================================== */
 const QUALITY = [
-  { name:'LOW',   ssao:10, ssr:0,  vol:0,  volSteps:0,  sunSM:1024, spotSM:512,  bloom:4, taa:1, rain:900  },
-  { name:'HIGH',  ssao:16, ssr:32, vol:1,  volSteps:26, sunSM:2048, spotSM:1024, bloom:5, taa:1, rain:2000 },
-  { name:'ULTRA', ssao:24, ssr:48, vol:1,  volSteps:44, sunSM:2048, spotSM:1024, bloom:6, taa:1, rain:3400 },
+  { name:'LOW',   ssao:10, ssr:0,  vol:0,  volSteps:0,  sunSM:1024, spotSM:512,  bloom:4, taa:1, rain:0 },
+  { name:'HIGH',  ssao:14, ssr:24, vol:1,  volSteps:22, sunSM:2048, spotSM:1024, bloom:5, taa:1, rain:0 },
+  { name:'ULTRA', ssao:20, ssr:36, vol:1,  volSteps:32, sunSM:2048, spotSM:1024, bloom:6, taa:1, rain:0 },
 ];
 const R = {
-  W:1, H:1, scale:1, q:2,
+  W:1, H:1, scale:1, q:1,
   gbuf:null, hdrColor:null, hdrFBO:null, hdrFBOd:null,
   aoRaw:null, aoTmp:null, ao:null, aoFBO:[],
   ssr:null, ssrFBO:null, vol:null, volFBO:null,
@@ -2353,8 +2419,9 @@ function bakeEnv(){
   gl.useProgram(R.P.skybake);
   u1f(R.P.skybake,'uSkyTime', 40.0);
   u1f(R.P.skybake,'uFlash', 0.0);
-  u1f(R.P.skybake,'uDiscPow', 22.0);   // prefiltered: a soft moon in reflections
-  u1f(R.P.skybake,'uDiscAmp', 1.1);
+  u1f(R.P.skybake,'uDiscPow', 30.0);   // prefiltered: a soft sun in reflections
+  u1f(R.P.skybake,'uDiscAmp', 1.0);
+  u3f(R.P.skybake,'uSunDirSky', SUN[0],SUN[1],SUN[2]);
   for(let m=0;m<R.envMips;m++){
     const s = S>>m;
     gl.viewport(0,0,s,s);
@@ -2453,25 +2520,66 @@ function resize(){
 }
 
 /* ==========================================================================
-   LEVEL — BLACKMARSH MANOR
-   A large derelict mansion explored in the dark. No objective but to get out
-   alive: reach the conservatory doors in the far east wing. Something else is
-   in the house with you.
-     footprint x[-28,28] z[-20,26] · ground ceiling 4.4 · great hall 8.6
-     upper landing y 4.5 · spawn in the entrance foyer at z 23
+   WORLD — THE GREEN EXPANSE
+   A bright open-world you can wander freely: rolling meadows, a forest, a lake,
+   sea cliffs, and a great mountain. Climb anything, glide from the heights,
+   swim the water. Discovery drives progress — raise the survey towers, find the
+   shrines. No enemies, no fail state; the world is the reward.
    ========================================================================== */
-const CEIL = 4.4;            // ground-floor ceiling (also the rain-top reference)
-const HALL_H = 8.6;          // the great hall is double height
-const UP_Y = 4.5;            // upper landing / gallery floor level
-const MX0=-28, MX1=28, MZ0=-20, MZ1=26;
-let exitZone = null;         // {x,z,r} — step inside to escape
+const CEIL = 999;                     // (legacy name; unused outdoors)
+const WORLD = 190;                    // half-extent — world spans [-190,190]
+const WATER_Y = 2.4;                  // sea / lake level
 
-const colliders = [];       // axis-aligned boxes the player collides with
-const ramps = [];           // walkable sloped surfaces (stairs)
-const lights = [];          // punctual lights (all bank -1 = always on here)
-const flames = [];          // fire/candle light sources, animated each frame
-const cells = [];           // (legacy — unused in the mansion, kept inert)
+const colliders = [];       // axis-aligned boxes (trees, rocks, structures)
+const ramps = [];           // walkable sloped surfaces (kept for structures)
+const lights = [];          // punctual lights (shrine glows, campfires)
+const flames = [];          // animated fire/glow sources
+const cells = [];           // (legacy — kept inert)
 let breaker = null;
+
+/* discovery-driven content */
+const towers = [];          // {x,y,z, r, up}  raise by climbing to the top
+const shrines = [];         // {x,y,z, r, found}
+const groves = [];          // {x,z} fruit-tree clusters (pickable)
+const pickups = [];         // {x,y,z, got}  glowing fruit / seeds
+let discovered = 0, seeds = 0, spawnPt = {x:0,y:0,z:0};
+
+/* ---------------- terrain heightfield (single source of truth) ------------- */
+function vnoise2(x,z){
+  const xi=Math.floor(x), zi=Math.floor(z), xf=x-xi, zf=z-zi;
+  const u=xf*xf*(3-2*xf), v=zf*zf*(3-2*zf);
+  const h=(a,b)=>{ let n=(Math.imul(a|0,374761393)^Math.imul(b|0,668265263))>>>0;
+    n=Math.imul(n^(n>>>13),1274126177)>>>0; return (n>>>0)/4294967296; };
+  const a=h(xi,zi), b=h(xi+1,zi), c=h(xi,zi+1), d=h(xi+1,zi+1);
+  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+}
+function fbm2(x,z,oct){ let s=0,amp=0.5,tot=0,f=1; for(let i=0;i<oct;i++){
+  s+=amp*vnoise2(x*f,z*f); tot+=amp; f*=2.03; x+=1.7; z+=2.3; amp*=0.5; } return s/tot; }
+// the shape of the land
+function terrainH(x,z){
+  const r = Math.hypot(x,z);
+  let h = 7.0;                                            // base above the waterline
+  h += (fbm2(x*0.010+40, z*0.010+40, 5)-0.35) * 26;      // rolling hills
+  h += (fbm2(x*0.045+7, z*0.045+7, 3)-0.5) * 3.5;        // fine roughness
+  // great mountain, north-east
+  const md = Math.hypot(x-95, z-78);
+  h += Math.max(0, 1-md/115) * 54 * (0.55 + 0.45*fbm2(x*0.03,z*0.03,3));
+  // a broad lake basin, south-west (dips well below the waterline)
+  const ld = Math.hypot(x+82, z+66);
+  h -= Math.max(0, 1-ld/60) * 20;
+  // a gentle raised meadow where you begin (spawn stays dry)
+  h += Math.max(0, 1-r/40) * 2.5;
+  // island falloff into the sea at the world edge
+  h -= smoothstep(WORLD*0.6, WORLD*1.02, r) * 34;
+  return h;
+}
+function terrainNormal(x,z){
+  const e=0.6;
+  const hL=terrainH(x-e,z), hR=terrainH(x+e,z), hD=terrainH(x,z-e), hU=terrainH(x,z+e);
+  const nx=hL-hR, nz=hD-hU, ny=2*e;
+  const l=Math.hypot(nx,ny,nz)||1; return [nx/l, ny/l, nz/l];
+}
+function groundH(x,z){ return Math.max(terrainH(x,z), -40); }
 
 function solid(x0,y0,z0,x1,y1,z1){
   colliders.push({x0:Math.min(x0,x1), y0:Math.min(y0,y1), z0:Math.min(z0,z1),
@@ -2531,440 +2639,317 @@ function addLight(x,y,z, col, intensity, range, bank, opts){
 }
 
 function buildLevel(){
-  const rnd = mulberry32(20260729);
+  const rnd = mulberry32(70021);
   const R2 = (a,b)=>a+(b-a)*rnd();
-  const WT = 0.18;                       // wall half-thickness
-  const WALLTINT = [0.50,0.47,0.43];     // damp faded plaster
-  const WOODTINT = [0.30,0.21,0.13];
-  const DOORH = 2.15;
+  const TERRAIN_ID=32, WATER_ID=65;
 
-  /* ---- wall builder with door gaps + lintels + casings ---- */
-  function seg(isVert, fixed, a, b, doors, h, y0, mat, tint){
-    h=h===undefined?CEIL:h; y0=y0||0; mat=(mat===undefined?MAT.PLASTER:mat); tint=tint||WALLTINT;
-    const ds=(doors||[]).slice().sort((p,q)=>p[0]-q[0]);
-    let cur=a; const spans=[];
-    for(const d of ds){ if(d[0]>cur) spans.push([cur,d[0]]); cur=Math.max(cur,d[1]); }
-    if(cur<b) spans.push([cur,b]);
-    for(const s of spans){ const c=(s[0]+s[1])/2, hf=(s[1]-s[0])/2; if(hf<=0.002) continue;
-      if(isVert) box(fixed, y0+h/2, c, WT, h/2, hf, mat, {uv:1.3, solid:true, tint});
-      else       box(c, y0+h/2, fixed, hf, h/2, WT, mat, {uv:1.3, solid:true, tint}); }
-    for(const d of ds){ const c=(d[0]+d[1])/2, hf=(d[1]-d[0])/2;
-      if(DOORH<h){ if(isVert) box(fixed, y0+(DOORH+h)/2, c, WT, (h-DOORH)/2, hf, mat, {uv:1.3, solid:true, tint});
-                   else       box(c, y0+(DOORH+h)/2, fixed, hf, (h-DOORH)/2, WT, mat, {uv:1.3, solid:true, tint}); }
-      const fw=0.08;
-      if(isVert){ box(fixed, y0+DOORH/2, c-hf-fw, WT*1.15, DOORH/2, fw, MAT.WOOD, {uv:2.4, tint:WOODTINT});
-                  box(fixed, y0+DOORH/2, c+hf+fw, WT*1.15, DOORH/2, fw, MAT.WOOD, {uv:2.4, tint:WOODTINT});
-                  box(fixed, y0+DOORH+fw, c, WT*1.15, fw, hf+fw, MAT.WOOD, {uv:2.4, tint:WOODTINT}); }
-      else      { box(c-hf-fw, y0+DOORH/2, fixed, fw, DOORH/2, WT*1.15, MAT.WOOD, {uv:2.4, tint:WOODTINT});
-                  box(c+hf+fw, y0+DOORH/2, fixed, fw, DOORH/2, WT*1.15, MAT.WOOD, {uv:2.4, tint:WOODTINT});
-                  box(c, y0+DOORH+fw, fixed, hf+fw, fw, WT*1.15, MAT.WOOD, {uv:2.4, tint:WOODTINT}); }
-    }
+  // ---- the ground itself + the water ----
+  addStatic('terrain', 0,0,0, 0,0,0, 1,1,1, TERRAIN_ID, {});
+  addStatic('quad', 0, WATER_Y, 0, 0,0,0, 2*WORLD, 1, 2*WORLD, WATER_ID, {emissive:1.0});
+
+  spawnPt = { x:0, y:terrainH(0,0), z:0 };
+
+  const gentle = (x,z,ms)=>{ if(terrainH(x,z) < WATER_Y+0.6) return false;
+    return terrainNormal(x,z)[1] > (ms||0.85); };
+
+  // ---- a tree: trunk + layered green canopy (trunk collides, canopy doesn't) ----
+  function tree(x,z,s){
+    const y=terrainH(x,z), th=s*(2.4+R2(0,1.0));
+    cyl(x, y+th*0.5, z, s*0.20, th*0.5, MAT.WOOD, {uv:2.4, solid:true, tint:[0.30,0.20,0.11]});
+    const g=[R2(0.45,0.72),R2(0.80,1.12),R2(0.36,0.58)];
+    for(let k=0;k<3;k++){ const cy=y+th+s*(0.3+k*0.55), cr=s*(1.55-k*0.38);
+      addStatic('sph', x+R2(-0.25,0.25)*s, cy, z+R2(-0.25,0.25)*s, R2(0,6.28),0,0, cr, cr*0.82, cr,
+        MAT.MOSS, {uv:2.4, rough:1.0, tint:g}); }
   }
-  const hwall=(z,x0,x1,doors,h,y0)=>seg(false,z,x0,x1,doors,h,y0);
-  const vwall=(x,z0,z1,doors,h,y0)=>seg(true,x,z0,z1,doors,h,y0);
-
-  /* ---- exterior wall with window openings (moonlight rakes through) ---- */
-  function extWall(isVert, fixed, a, b, wins){
-    // full-height wall with a full gap at each window, then fill sill/header/muntins
-    seg(isVert, fixed, a, b, wins.map(w=>[w-0.85,w+0.85]), CEIL, 0);
-    const yS=1.0, yH=2.9;
-    for(const w of wins){ const hf=0.85;
-      if(isVert){
-        box(fixed, yS/2, w, WT, yS/2, hf, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
-        box(fixed, (yH+CEIL)/2, w, WT, (CEIL-yH)/2, hf, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
-        box(fixed, (yS+yH)/2, w, WT*0.5, (yH-yS)/2, 0.035, MAT.WOOD,{uv:3,solid:true,tint:[0.16,0.13,0.1]});
-        box(fixed, (yS+yH)/2, w, WT*0.5, 0.035, hf, MAT.WOOD,{uv:3,tint:[0.16,0.13,0.1]});
-      } else {
-        box(w, yS/2, fixed, hf, yS/2, WT, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
-        box(w, (yH+CEIL)/2, fixed, hf, (CEIL-yH)/2, WT, MAT.PLASTER,{uv:1.3,solid:true,tint:WALLTINT});
-        box(w, (yS+yH)/2, fixed, 0.035, (yH-yS)/2, WT*0.5, MAT.WOOD,{uv:3,solid:true,tint:[0.16,0.13,0.1]});
-        box(w, (yS+yH)/2, fixed, hf, 0.035, WT*0.5, MAT.WOOD,{uv:3,tint:[0.16,0.13,0.1]});
-      }
-    }
+  function pine(x,z,s){
+    const y=terrainH(x,z), th=s*2.0;
+    cyl(x, y+th*0.5, z, s*0.16, th*0.5, MAT.WOOD, {uv:2.4, solid:true, tint:[0.26,0.17,0.10]});
+    for(let k=0;k<3;k++) addStatic('cone', x, y+th+s*(0.4+k*1.1), z, 0,R2(0,6.28),0,
+      s*(1.5-k*0.42), s*(1.3-k*0.28), s*(1.5-k*0.42), MAT.MOSS, {uv:2.2, rough:1.0, tint:[0.16,0.34,0.16]});
+  }
+  function rock(x,z,s){
+    const y=terrainH(x,z);
+    addStatic('rock'+(Math.floor(rnd()*3)), x, y+s*0.5, z, R2(0,6.28),R2(0,6.28),R2(0,6.28),
+      s*R2(0.8,1.4), s, s*R2(0.8,1.4), MAT.MARBLE, {uv:2.0, rough:1.0, tint:[0.62,0.60,0.55]});
+    solid(x-s*0.9, y, z-s*0.9, x+s*0.9, y+s*1.1, z+s*0.9);
+  }
+  function tuft(x,z){
+    const y=terrainH(x,z), s=R2(0.18,0.4);
+    addStatic('cone', x, y+s*0.9, z, 0,R2(0,6.28),0, s*0.7, s, s*0.7, MAT.MOSS,
+      {uv:2.0, rough:1.0, tint:[R2(0.3,0.55),R2(0.55,0.85),R2(0.2,0.4)]});
+  }
+  function flower(x,z){
+    const y=terrainH(x,z);
+    addStatic('sph', x, y+0.18, z, 0,0,0, 0.10,0.10,0.10, MAT.PAINT,
+      {uv:3, emissive:0.25, tint: rnd()<0.5?[1.0,0.7,0.15]:[0.8,0.4,0.9]});
   }
 
-  /* ---- floors & ceilings ---- */
-  function floorSlab(x0,z0,x1,z1,mat,tint,uv){
-    addStatic('quad',(x0+x1)/2,0.02,(z0+z1)/2,0,0,0, Math.abs(x1-x0),1,Math.abs(z1-z0), mat,
-      {uv:uv||1.6, tint:tint||[0.5,0.4,0.3]});
+  // ---- forest belt (north), scattered copses, meadow tufts & flowers ----
+  for(let i=0;i<95;i++){ const x=R2(-140,150), z=R2(20,150);
+    if(!gentle(x,z,0.88)) continue; (rnd()<0.5?pine:tree)(x,z, R2(1.0,1.9)); }
+  for(let i=0;i<60;i++){ const x=R2(-160,160), z=R2(-160,160);
+    if(!gentle(x,z,0.9)) continue; if(Math.hypot(x,z)<30) continue; tree(x,z,R2(0.9,1.6)); }
+  for(let i=0;i<85;i++){ const x=R2(-170,170), z=R2(-170,170);
+    if(!gentle(x,z,0.7)) continue; rock(x,z, R2(0.6,2.6)); }
+  for(let i=0;i<850;i++){ const x=R2(-170,170), z=R2(-170,170);
+    if(!gentle(x,z,0.86)) continue; tuft(x,z); }
+  for(let i=0;i<180;i++){ const x=R2(-90,90), z=R2(-90,90);
+    if(!gentle(x,z,0.9)) continue; flower(x,z); }
+
+  // ---- three fruit groves with pickable glowing fruit ----
+  const groveSpots=[[-30,40],[55,-20],[20,95]];
+  for(const [gx,gz] of groveSpots){ groves.push({x:gx,z:gz});
+    for(let i=0;i<6;i++){ const a=i/6*TAU, x=gx+Math.cos(a)*R2(3,7), z=gz+Math.sin(a)*R2(3,7);
+      if(!gentle(x,z,0.85)) continue; tree(x,z,1.5);
+      const fy=terrainH(x,z)+3.0;
+      pickups.push({x, y:fy, z, got:false}); } }
+
+  // ---- a shrine: sunken stone pedestal with a warm glow (discovery target) ----
+  function shrine(x,z){
+    const y=terrainH(x,z);
+    for(let s=0;s<3;s++) cyl(x, y+0.2+s*0.35, z, 2.4-s*0.5, 0.18, MAT.MARBLE,
+      {uv:1.6, solid:true, tint:[0.5,0.48,0.44]});
+    box(x, y+1.4, z, 0.7,0.7,0.7, MAT.STEEL, {uv:2, solid:true, ry:0.6, tint:[0.4,0.42,0.44]});
+    addStatic('sph', x, y+1.4, z, 0,0,0, 0.55,0.55,0.55, MAT.GLASS,
+      {uv:3, emissive:2.6, tint:[1.0,0.55,0.2]});
+    const L=addLight(x, y+1.6, z, [1.0,0.55,0.2], 1.4, 12, -1, {flick:0.05});
+    flames.push({x, y:y+1.4, z, s:0.14, warm:1});
+    shrines.push({x, y:y+1.4, z, r:3.2, found:false, light:L});
   }
-  function ceilSlab(x0,z0,x1,z1,y,tint){
-    box((x0+x1)/2, y+0.15, (z0+z1)/2, Math.abs(x1-x0)/2, 0.15, Math.abs(z1-z0)/2, MAT.PLASTER,
-      {uv:1.4, solid:true, tint:tint||[0.34,0.32,0.30]});
+  shrine(-70,-58);            // by the lake
+  shrine(60,60);              // forest clearing
+  shrine(-95,90);             // north woods
+  shrine(110,-40);            // eastern hills
+  shrine(30,-95);             // south meadow
+  shrine(88,64);              // mountain shoulder
+
+  // ---- a survey tower: tall climbable spire, glowing beacon on top ----
+  function tower(x,z){
+    const base=terrainH(x,z), H=20;
+    for(let s=0;s<9;s++){ const yy=base+s*(H/9), r=2.2-s*0.14;
+      cyl(x, yy+ (H/9)*0.5, z, r, (H/9)*0.5, MAT.MARBLE, {uv:1.4, solid:true, tint:[0.60,0.58,0.52]}); }
+    // top platform
+    cyl(x, base+H+0.2, z, 2.2, 0.2, MAT.MARBLE, {uv:1.6, solid:true, tint:[0.55,0.52,0.48]});
+    addStatic('sph', x, base+H+1.0, z, 0,0,0, 0.7,0.9,0.7, MAT.GLASS,
+      {uv:3, emissive:2.2, tint:[0.35,0.8,1.0]});
+    const L=addLight(x, base+H+1.0, z, [0.35,0.8,1.0], 2.0, 20, -1, {flick:0.03});
+    flames.push({x, y:base+H+1.0, z, s:0.16, warm:0});
+    towers.push({x, y:base+H+1.2, z, r:3.0, up:false, light:L, top:base+H});
   }
-  function baseboard(isVert,fixed,a,b,y0){ // dark skirting where wall meets floor
-    const c=(a+b)/2, hf=Math.abs(b-a)/2;
-    if(isVert) box(fixed,(y0||0)+0.14,c, WT*1.2,0.14,hf, MAT.WOOD,{uv:3,tint:WOODTINT});
-    else       box(c,(y0||0)+0.14,fixed, hf,0.14,WT*1.2, MAT.WOOD,{uv:3,tint:WOODTINT});
-  }
+  tower(0,-30);               // near spawn — the tutorial tower
+  tower(-100,-50);            // over the lake country
+  tower(70,40);               // toward the mountain
 
-  /* ---- furniture ---- */
-  function table(x,z,w,d,h,ry){ ry=ry||0;
-    box(x,h,z, w/2,0.06,d/2, MAT.WOOD,{uv:2.2,ry,solid:true,tint:[0.26,0.17,0.10]});
-    for(const sx of [-1,1]) for(const sz of [-1,1])
-      box(x+sx*(w/2-0.1)*Math.cos(ry), h/2, z+sz*(d/2-0.1), 0.05,h/2,0.05, MAT.WOOD,{uv:4,tint:WOODTINT}); }
-  function chair(x,z,ry){ ry=ry||0;
-    box(x,0.46,z,0.20,0.04,0.20,MAT.WOOD,{uv:3,ry,solid:true,tint:[0.24,0.15,0.09]});
-    box(x-Math.sin(ry)*0.18,0.75,z-Math.cos(ry)*0.18,0.20,0.28,0.03,MAT.WOOD,{uv:3,ry,tint:WOODTINT});
-    for(const sx of [-1,1]) for(const sz of [-1,1]) box(x+sx*0.16,0.23,z+sz*0.16,0.03,0.23,0.03,MAT.WOOD,{uv:5,tint:WOODTINT}); }
-  function shelf(x,z,ry,w){ ry=ry||0; w=w||1.6;
-    box(x,1.35,z, w/2,1.35,0.22, MAT.WOOD,{uv:2,ry,solid:true,tint:[0.22,0.14,0.08]});
-    for(let i=0;i<4;i++) box(x,0.5+i*0.62,z-0.0, w/2-0.05,0.03,0.19, MAT.WOOD,{uv:3,ry,tint:[0.18,0.12,0.07]});
-    // book rows
-    for(let s=0;s<4;s++) for(let i=0;i<10;i++){
-      const bx=x + (i/10-0.45)*(w-0.1)*Math.cos(ry) - 0*Math.sin(ry);
-      const bz=z + (i/10-0.45)*(w-0.1)*Math.sin(ry);
-      box(bx,0.5+s*0.62+0.16,z, 0.035,R2(0.12,0.19),0.14, MAT.WOOD,{uv:6,ry,
-        tint:[R2(0.1,0.4),R2(0.05,0.25),R2(0.03,0.15)]}); } }
-  function sheetForm(x,z,w,d,h){ // furniture under a dust sheet — pale ghostly lump
-    box(x,h/2,z,w/2,h/2,d/2, MAT.PLASTER,{uv:2.4,solid:true,tint:[0.42,0.41,0.40],rough:1.1});
-    box(x,h+0.02,z,w/2+0.05,0.04,d/2+0.05, MAT.PLASTER,{uv:2.4,tint:[0.46,0.45,0.44],rough:1.1}); }
-  function bed(x,z,ry){ ry=ry||0;
-    box(x,0.32,z,1.05,0.28,1.5,MAT.WOOD,{uv:2,ry,solid:true,tint:[0.2,0.13,0.08]});
-    box(x,0.58,z,1.0,0.14,1.45,MAT.PLASTER,{uv:2.4,ry,tint:[0.4,0.38,0.36],rough:1.1});
-    box(x,0.72,z-1.35,1.0,0.5,0.12,MAT.WOOD,{uv:2,ry,solid:true,tint:WOODTINT}); }
-  function rug(x,z,w,d,tint){ addStatic('quad',x,0.03,z,0,0,0,w,1,d,MAT.PAINT,{uv:1.2,tint:tint||[0.28,0.08,0.07],rough:1.2}); }
-  function painting(isVert,fixed,at,y,w,tint){ // framed portrait on a wall
-    if(isVert){ box(fixed,y,at,0.06,w*0.62,w/2,MAT.WOOD,{uv:2,tint:[0.30,0.22,0.10]});
-                box(fixed-0.001*Math.sign(fixed||1),y,at,0.02,w*0.62-0.08,w/2-0.08,MAT.PAINT,{uv:1.5,tint:tint||[0.14,0.11,0.08]}); }
-    else { box(at,y,fixed,w/2,w*0.62,0.06,MAT.WOOD,{uv:2,tint:[0.30,0.22,0.10]});
-           box(at,y,fixed,w/2-0.08,w*0.62-0.08,0.02,MAT.PAINT,{uv:1.5,tint:tint||[0.14,0.11,0.08]}); } }
-  function chandelier(x,y,z,arms,warm){
-    cyl(x,y,z,0.05,0.55,MAT.STEEL,{uv:3,mesh:'cyl8',tint:[0.2,0.2,0.22]});
-    cyl(x,y-0.55,z,0.4,0.06,MAT.COPPER,{uv:3,mesh:'tor'});
-    for(let i=0;i<arms;i++){ const a=i/arms*TAU;
-      const cx=x+Math.cos(a)*0.5, cz=z+Math.sin(a)*0.5;
-      cyl(cx,y-0.5,cz,0.02,0.12,MAT.STEEL,{uv:4,mesh:'cyl8',tint:[0.4,0.3,0.15]}); }
-    const L=addLight(x,y-0.5,z, warm?[1.0,0.62,0.28]:[0.7,0.78,0.95], warm?1.1:0.5, 9, -1, {flick:0.28});
-    L.chand={x,y:y-0.5,z,arms}; }
-  function sconce(x,z,ry,intensity){ // wall light, warm, flickering
-    const ox=Math.cos(ry)*0.16, oz=Math.sin(ry)*0.16;
-    box(x,2.1,z,0.08,0.14,0.08,MAT.RUST,{uv:3,solid:false,tint:[0.25,0.18,0.1]});
-    const L=addLight(x-ox,2.15,z-oz, [1.0,0.55,0.22], intensity===undefined?0.7:intensity, 7, -1, {flick:0.35});
-    L.sconce={x:x-ox,y:2.15,z:z-oz}; flames.push({x:x-ox,y:2.2,z:z-oz,s:0.08,warm:1}); }
-  function candelabra(x,z){ box(x,0.9,z,0.04,0.9,0.04,MAT.WOOD,{uv:4,solid:false,tint:[0.15,0.12,0.08]});
-    const L=addLight(x,1.9,z,[1.0,0.6,0.24],0.35,4.5,-1,{flick:0.5}); L.candle=true;
-    flames.push({x,y:1.9,z,s:0.05,warm:1}); }
-  function fireplace(x,z,ry){ // hearth with a live fire in the drawing room
-    box(x,1.0,z,1.3,1.0,0.4,MAT.MARBLE,{uv:1.6,ry,solid:true,tint:[0.3,0.29,0.27]});
-    box(x,1.9,z,1.5,0.16,0.5,MAT.MARBLE,{uv:1.6,ry,solid:true,tint:[0.34,0.33,0.31]});
-    box(x,0.85,z+0.05,0.85,0.85,0.28,MAT.RUST,{uv:2,ry,tint:[0.05,0.04,0.03]});
-    const L=addLight(x,0.7,z+0.1,[1.0,0.5,0.16],1.9,8,-1,{flick:0.6});
-    L.fire=true; flames.push({x,y:0.6,z:z+0.1,s:0.22,warm:1,big:1}); }
-
-  /* ================= SHELL ================= */
-  // ground floor + ceilings per room
-  floorSlab(MX0,MZ0,MX1,MZ1, MAT.WOOD, [0.26,0.18,0.11], 3.2);     // planks everywhere
-  floorSlab(-9,16,9,26, MAT.MARBLE, [0.32,0.31,0.30], 2.2);        // foyer marble
-  floorSlab(-9,-2,9,16, MAT.MARBLE, [0.28,0.27,0.27], 2.6);        // great hall marble
-  // ceilings (great hall is open to HALL_H; others CEIL)
-  ceilSlab(-28,16,-9,26, CEIL);  ceilSlab(9,16,28,26, CEIL);        // front wings
-  ceilSlab(-9,16,9,26, CEIL);                                       // foyer
-  ceilSlab(-28,-2,-9,16, CEIL);  ceilSlab(9,-2,28,16, CEIL);        // mid wings
-  ceilSlab(-28,-20,-9,-2, CEIL); ceilSlab(9,-20,28,-2, CEIL);       // rear wings
-  ceilSlab(-9,-20,9,-2, CEIL);                                      // rear hall
-  ceilSlab(-9,-2,9,16, HALL_H);                                     // great hall high ceiling
-
-  /* ================= EXTERIOR WALLS ================= */
-  extWall(false, 26, MX0, MX1, [-20,-14,14,20]);                   // front (with the sealed doors below)
-  hwall(26, -3, 3, [], CEIL);                                      // (front doors are solid/chained)
-  extWall(false, MZ0, MX0, MX1, [-20,-6,6,20]);                    // rear
-  extWall(true, MX0, MZ0, MZ1, [-14,-6,6,14,20]);                  // west
-  // east wall — the EXIT is a full doorway in the ballroom (z -16..-13)
-  extWall(true, MX1, MZ0, MZ1, [6,14,20]);
-  vwall(MX1, MZ0, -2, [[-16.5,-13]], CEIL);                        // ballroom east: exit gap + rest wall
-  vwall(MX1, -2, MZ1, [], CEIL);
-  exitZone = { x:29.0, z:-14.75, r:2.4 };
-
-  /* ================= INTERIOR WALLS (doorways as gaps) ================= */
-  // z=16 : front rooms / mid rooms + foyer/hall
-  hwall(16, MX0, -9, [[-18,-16]]);          // library <-> drawing
-  hwall(16, -9, 9,  [[-1.4,1.4]]);          // foyer  <-> great hall (grand opening)
-  hwall(16, 9, MX1, [[16,18]]);             // dining <-> study
-  // z=-2 : mid / rear
-  hwall(-2, MX0, -9, [[-18,-16]]);          // drawing <-> kitchen
-  hwall(-2, -9, 9,  [[-1.4,1.4]]);          // hall <-> rear hall
-  hwall(-2, 9, MX1, [[16,18]]);             // study <-> ballroom
-  // x=-9 : centre / west
-  vwall(-9, 16, 26, [[20,22]]);             // foyer <-> library
-  vwall(-9, -2, 16, [[6,8]]);               // hall  <-> drawing
-  vwall(-9, MZ0, -2, [[-8,-6]]);            // rear hall <-> kitchen
-  // x=9 : centre / east
-  vwall(9, 16, 26, [[20,22]]);              // foyer <-> dining
-  vwall(9, -2, 16, [[6,8]]);                // hall  <-> study
-  vwall(9, MZ0, -2, [[-8,-6]]);             // rear hall <-> ballroom
-
-  /* ================= GRAND STAIR + UPPER LANDING ================= */
-  // stair climbs along the great-hall west side, z 4->14, up to UP_Y
-  for(let i=0;i<16;i++){ const t=i/16, y=t*UP_Y, z=4+t*9.5;
-    box(-6.2, y+0.12, z, 1.5, 0.12+y*0.02, 0.34, MAT.WOOD,{uv:2.4,tint:[0.24,0.16,0.09]}); }
-  ramp(-7.7,-4.7, 4.0,0.0, 13.6,UP_Y);
-  box(-4.55,1.2,9.0,0.12,1.2,5.0,MAT.WOOD,{uv:2,solid:true,tint:WOODTINT});     // stair rail base
-  for(let i=0;i<12;i++){ const t=i/11; cyl(-4.55, lerp(0.4,UP_Y+0.5,t), lerp(4.5,13.4,t), 0.03,0.5, MAT.STEEL,{uv:5,mesh:'cyl8',tint:[0.2,0.2,0.22]}); }
-  // landing deck across the front of the great hall, at UP_Y
-  box(0, UP_Y-0.15, 14.0, 8.6, 0.15, 2.2, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]});
-  box(-6.2, UP_Y-0.15, 9.0, 2.4, 0.15, 5.2, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]}); // west gallery run
-  // landing balustrade (won't fall into the hall)
-  for(let i=0;i<=16;i++){ const x=-8+i, z=11.9; cyl(x,UP_Y+0.45,z,0.035,0.45,MAT.STEEL,{uv:5,mesh:'cyl8',tint:[0.2,0.2,0.22]}); }
-  box(0,UP_Y+0.92,11.9,8.6,0.05,0.06,MAT.WOOD,{uv:3,tint:WOODTINT}); solid(-8.6,UP_Y,11.75,8.6,UP_Y+1.0,12.05);
-  // upper walls enclosing two bedrooms above the foyer wings, floor at UP_Y
-  ceilSlab(-9,11.5,9,26, HALL_H);                                  // ceiling over the landing/upper
-  // bedroom west (over library front): x[-28,-9] z[16,26] at UP_Y
-  box(-18.5, UP_Y-0.15, 21, 9.5, 0.15, 5.0, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]});   // W bedroom floor
-  box(18.5, UP_Y-0.15, 21, 9.5, 0.15, 5.0, MAT.WOOD,{uv:2.6,solid:true,tint:[0.26,0.18,0.11]});    // E bedroom floor
-  // walls of the upper bedrooms (height 3)
-  hwall(16.2, -28, -9, [[-20,-18]], 3.0, UP_Y);  vwall(-9, 16.2, 26, [], 3.0, UP_Y);
-  hwall(16.2, 9, 28, [[18,20]], 3.0, UP_Y);      vwall(9, 16.2, 26, [], 3.0, UP_Y);
-  ceilSlab(-28,16,-9,26, UP_Y+3.0); ceilSlab(9,16,28,26, UP_Y+3.0);
-  // ramp landing connects to bedroom corridor via the landing deck at z14; bridge:
-  ramp(-2.0,2.0, 13.9,UP_Y, 16.0,UP_Y);          // flat bridge onto the upper front
-
-  /* ================= WINDOW MOONLIGHT (soft fills so shafts read indoors) ================= */
-  for(const wz of [-16,-8,8,16,22]){ addLight(MX0+1.2, 2.0, wz, [0.28,0.36,0.52], 0.5, 7, -1, {}); }
-  for(const wz of [-8,8,20]){ addLight(MX1-1.2, 2.0, wz, [0.28,0.36,0.52], 0.5, 7, -1, {}); }
-  for(const wx of [-20,-14,14,20]){ addLight(wx, 2.0, MZ1-1.2, [0.30,0.38,0.55], 0.5, 7, -1, {}); }
-
-  /* ================= ROOM DRESSING ================= */
-  // FOYER — grand but rotten; a dead chandelier, a console, the sealed front doors
-  chandelier(0, CEIL-0.2, 21, 8, false);
-  table(0,21,1.4,0.5,0.5,0); candelabra(-0.5,21); candelabra(0.5,21);
-  painting(true,-8.8,21,1.9,1.1,[0.12,0.10,0.09]); painting(true,8.8,21,1.9,1.1,[0.1,0.09,0.08]);
-  box(0,1.3,25.7,1.6,1.3,0.12,MAT.WOOD,{uv:2,solid:true,tint:[0.15,0.10,0.06]});   // the barred front doors
-  for(let i=0;i<4;i++) box(0,0.7+i*0.7,25.55,1.7,0.06,0.06,MAT.RUST,{uv:5,rz:R2(-0.1,0.1),tint:[0.3,0.15,0.08]});
-  sconce(-8.6,23,0,0.7); sconce(8.6,23,Math.PI,0.7); rug(0,20,4,6,[0.2,0.06,0.05]);
-  baseboard(false,26,-9,9);
-
-  // GREAT HALL — the heart; grand stair, huge dead chandelier, portraits watching
-  chandelier(2.5, HALL_H-0.4, 8, 10, false);
-  painting(true,-8.8,4,2.4,1.6,[0.13,0.10,0.08]); painting(true,-8.8,12,2.4,1.6,[0.11,0.09,0.07]);
-  painting(true,8.8,4,2.4,1.6,[0.12,0.1,0.07]); painting(true,8.8,12,2.4,1.6,[0.10,0.08,0.06]);
-  sconce(-8.6,2.5,0,0.8); sconce(8.6,2.5,Math.PI,0.8); sconce(8.6,14,Math.PI,0.7);
-  rug(3,8,5,8,[0.16,0.05,0.05]);
-  sheetForm(5.5,4,1.2,0.7,0.8); table(6,13,1.6,0.7,0.5,0.3);
-  baseboard(true,-9,-2,16); baseboard(true,9,-2,16);
-
-  // LIBRARY — walls of shelves, a reading table, a fallen ladder
-  for(let i=0;i<5;i++) shelf(-27.6, 18+i*0*0 + (17.5+i*1.7), Math.PI/2, 1.5);
-  for(let i=0;i<5;i++) shelf(-10.4, 17.5+i*1.7, -Math.PI/2, 1.5);
-  for(let i=0;i<4;i++) shelf(-25+i*3.6, 25.6, 0, 2.0);
-  table(-18.5,20,1.8,1.0,0.5,0); chair(-18.5,21.3,0); chair(-18.5,18.7,Math.PI);
-  sconce(-9.2,22,-Math.PI/2,0.6); candelabra(-18.5,20);
-  rug(-18,20,7,7,[0.14,0.07,0.04]);
-  for(let i=0;i<8;i++) box(R2(-26,-11),R2(0.05,0.2),R2(17.5,25),0.12,0.04,0.16,MAT.WOOD,{uv:6,ry:R2(0,6.28),tint:[0.2,0.12,0.06]}); // fallen books
-
-  // DINING — long table, chairs, sheeted sideboard, a chandelier
-  chandelier(18.5, CEIL-0.25, 21, 6, true);
-  table(18.5,21,3.4,1.2,0.55,0);
-  for(let i=0;i<4;i++){ chair(16.8+i*1.15,22.6,0); chair(16.8+i*1.15,19.4,Math.PI); }
-  sheetForm(11.5,24,1.6,0.6,1.0); painting(false,26,18.5,1.6,1.0,[0.12,0.1,0.08]);
-  sconce(9.2,20,Math.PI/2,0.65); rug(18.5,21,6,4,[0.15,0.05,0.05]);
-
-  // DRAWING ROOM — the fireplace, sofas under sheets, warm firelight
-  fireplace(-27.4,7,Math.PI/2);
-  sheetForm(-20,3,2.0,0.9,0.9); sheetForm(-15,3,1.8,0.9,0.9); sheetForm(-17.5,12,1.0,1.0,0.8);
-  table(-17.5,7,1.1,1.1,0.45,0); chair(-14,10,0.6);
-  painting(false,16,-18,1.6,1.1,[0.13,0.10,0.08]); sconce(-9.2,10,-Math.PI/2,0.6);
-  rug(-18,7,9,9,[0.18,0.06,0.05]);
-
-  // STUDY — desk, chair, shelves, scattered papers, a single candle
-  table(18.5,7,1.8,0.9,0.55,0.2); chair(18.5,8.6,Math.PI+0.2); candelabra(18.5,7);
-  shelf(26.4,5,-Math.PI/2,2.2); shelf(26.4,10,-Math.PI/2,2.2);
-  sheetForm(12,12,1.2,0.9,0.9); painting(true,9.3,3,1.4,0.9,[0.12,0.09,0.07]);
-  sconce(9.2,12,Math.PI/2,0.55); rug(18,7,6,6,[0.14,0.06,0.05]);
-
-  // KITCHEN — long prep table, hanging pots, a cold hearth, debris
-  table(-18.5,-11,2.6,1.0,0.5,0); table(-25,-16,1.4,0.8,0.5,0);
-  for(let i=0;i<6;i++) cyl(-20+i*0.7,2.0,-18.5,0.09,0.13,MAT.STEEL,{uv:3,tint:[0.35,0.36,0.38]}); // hung pots
-  box(-27.3,1.0,-11,0.5,1.0,1.2,MAT.RUST,{uv:2,solid:true,tint:[0.1,0.08,0.06]});                 // range/stove
-  sconce(-9.2,-8,-Math.PI/2,0.5); candelabra(-18.5,-11);
-  for(let i=0;i<10;i++) box(R2(-27,-10),R2(0.05,0.3),R2(-19,-3),R2(0.1,0.3),R2(0.05,0.2),R2(0.1,0.3),
-    MAT.WOOD,{uv:4,ry:R2(0,6.28),tint:[0.18,0.13,0.08]});
-
-  // REAR HALL — a dark spine corridor, portraits, a runner rug, flickering sconces
-  sconce(-8.6,-11,0,0.55); sconce(8.6,-11,Math.PI,0.55); sconce(0,-3.4,0,0.5);
-  painting(false,-2.3,0,1.6,1.1,[0.11,0.09,0.07]);
-  rug(0,-11,3.2,14,[0.15,0.06,0.05]);
-  sheetForm(-6,-17,1.0,1.0,1.4);
-
-  // BALLROOM — big empty room, the way OUT; tall windows, a ruined chandelier, moonlit floor
-  chandelier(18.5,CEIL-0.2,-11,10,false);
-  sconce(9.2,-6,Math.PI/2,0.6); sconce(9.2,-16,Math.PI/2,0.6);
-  painting(true,9.3,-16,1.8,1.2,[0.1,0.08,0.06]);
-  sheetForm(24,-6,1.4,1.4,1.0); sheetForm(14,-18,1.2,1.2,0.9);
-  rug(18,-11,8,10,[0.13,0.05,0.05]);
-  // moonlight pouring through the open exit + a cold guide-light so the way out reads
-  addLight(28.5,1.6,-14.75,[0.5,0.62,0.85],1.6,10,-1,{});
-  box(29.2,1.1,-14.75,0.2,1.1,1.6,MAT.PLASTER,{uv:1.3,tint:[0.4,0.42,0.5]});   // porch beyond the doors
-
-  // UPPER BEDROOMS — beds under sheets, a child's chair, one flickering candle each
-  bed(-22,20,0); sheetForm(-13,19,1.4,0.9,0.9); candelabra(-16,23);
-  addLight(-18,UP_Y+2.2,21,[1.0,0.55,0.22],0.4,6,-1,{flick:0.4});
-  bed(22,20,Math.PI); sheetForm(13,22,1.4,0.9,0.9); chair(16,18,0.4);
-  addLight(18,UP_Y+2.2,21,[1.0,0.55,0.22],0.4,6,-1,{flick:0.4});
-  // landing sconces
-  sconce(-8.6,13.5,0,0.6); sconce(8.6,13.5,Math.PI,0.6);
-
-  // a scatter of dust, cobwebs and decay everywhere (mossy damp in the corners)
-  for(let i=0;i<70;i++){
-    const x=R2(MX0+1,MX1-1), z=R2(MZ0+1,MZ1-1);
-    box(x, R2(0.03,0.12), z, R2(0.2,0.7),0.02,R2(0.2,0.7), MAT.MOSS,
-      {uv:R2(2,4), ry:R2(0,6.28), rough:1.1, tint:[R2(0.4,0.7),R2(0.5,0.8),R2(0.35,0.6)]});
-  }
+  // ---- a little ruined arch landmark + a campfire rest spot near spawn ----
+  for(const sx of [-1,1]) cyl(sx*3, terrainH(sx*3,-14)+2.2, -14, 0.5,2.2, MAT.MARBLE,
+    {uv:1.4, solid:true, tint:[0.5,0.48,0.44]});
+  box(0, terrainH(0,-14)+4.6, -14, 3.6,0.5,0.6, MAT.MARBLE, {uv:1.4, solid:true, tint:[0.5,0.48,0.44]});
+  { const fy=terrainH(6,6); box(6,fy+0.15,6,0.7,0.15,0.7,MAT.WOOD,{uv:2,tint:[0.35,0.24,0.14]});
+    addLight(6,fy+0.4,6,[1.0,0.5,0.15],1.2,7,-1,{flick:0.6}); flames.push({x:6,y:fy+0.35,z:6,s:0.2,warm:1,big:1}); }
 }
 
 /* ==========================================================================
-   PLAYER
+   PLAYER — third-person traveller, BOTW-style movement
    ========================================================================== */
 const PL = {
-  x:0, y:0, z:23, vx:0, vy:0, vz:0,
-  yaw:0, pitch:-0.03, onGround:true, crouch:0, bobT:0, bob:0, roll:0,
-  hw:0.30, hStand:1.75, hCrouch:1.08, eyeOff:0.12,
-  lamp:true, batt:1.0, lampFlick:1, sprint:0, stepAccum:0, landKick:0
+  x:0, y:0, z:0, vx:0, vy:0, vz:0,
+  face:0,                    // body facing (turns toward travel)
+  state:'ground',            // ground | air | glide | climb | swim
+  stamina:1, sprint:0, run:0,
+  hw:0.34, h:1.7,
+  anim:0, moving:0, gaitAmp:0,
+  cnx:0, cnz:1,              // climb surface outward normal (horizontal)
+  onGround:true, coyote:0, stepT:0, splashT:0
 };
+const CAM = { yaw:0.4, pitch:0.36, dist:6.4, x:0,y:0,z:0 };
 const keys = Object.create(null);
-let carried = 0, installed = 0, won = false, paused = false, started = false;
+let won=false, paused=false, started=false;
+let carried=0, installed=0;     // legacy, inert
 
-function playerH(){ return lerp(PL.hStand, PL.hCrouch, PL.crouch); }
-function eyeY(){ return PL.y + playerH() - PL.eyeOff + PL.bob; }
+function playerH(){ return PL.h; }
+function eyeY(){ return PL.y + 1.55; }    // legacy (unused in 3rd person)
 
 function hits(x,y,z,hw,h){
   for(let i=0;i<colliders.length;i++){
-    const c = colliders[i];
+    const c=colliders[i];
     if(x+hw>c.x0 && x-hw<c.x1 && z+hw>c.z0 && z-hw<c.z1 && y+h>c.y0 && y<c.y1) return c;
   }
   return null;
 }
-function movePlayer(dt){
-  const h = playerH();
-
-  // ---- de-penetration ----
-  // If we ever begin a frame embedded in a collider (a prop spawned on us, a
-  // teleport, a crouch under a low box), push out along the shallowest
-  // horizontal axis so the player can never get permanently wedged.
-  const emb = hits(PL.x, PL.y, PL.z, PL.hw, h);
-  // Only free genuine walls — a collider whose top is more than a step-up above
-  // the feet. Steppable ledges (stairs, kerbs) are left to the step-up code; if
-  // de-pen touched them it would shove the player back down every riser.
-  if(emb && (emb.y1 - PL.y) > 0.46){
-    const pxL=(PL.x+PL.hw)-emb.x0, pxR=emb.x1-(PL.x-PL.hw);
-    const pzL=(PL.z+PL.hw)-emb.z0, pzR=emb.z1-(PL.z-PL.hw);
-    const mx=Math.min(pxL,pxR), mz=Math.min(pzL,pzR);
-    if(Math.min(mx,mz) < 0.6){                 // only shallow overlaps, never big yanks
-      if(mx < mz){ PL.x += (pxL<pxR? -pxL-0.001 : pxR+0.001); }
-      else       { PL.z += (pzL<pzR? -pzL-0.001 : pzR+0.001); }
+// highest walkable surface at (x,z) not more than `lift` above y (terrain or a prop top)
+function supportAt(x,z,y,lift){
+  let g = terrainH(x,z);
+  for(let i=0;i<colliders.length;i++){ const c=colliders[i];
+    if(x+PL.hw>c.x0 && x-PL.hw<c.x1 && z+PL.hw>c.z0 && z-PL.hw<c.z1){
+      if(c.y1 <= y+lift && c.y1 > g) g = c.y1;
     }
   }
-
-  // ---- vertical ----
-  PL.vy -= 21.0*dt;
-  let ny = PL.y + PL.vy*dt;
-  const cv0 = hits(PL.x, ny, PL.z, PL.hw, h);
-  if(cv0){
-    if(PL.vy <= 0){
-      if(!PL.onGround && PL.vy < -5.0) PL.landKick = clamp(-PL.vy*0.016, 0, 0.16);
-      ny = cv0.y1; PL.onGround = true;
-    } else { ny = cv0.y0 - h - 0.001; }
-    PL.vy = 0;
-  } else PL.onGround = false;
-  if(ny < 0){ ny = 0; PL.vy = 0; PL.onGround = true; }
-  PL.y = ny;
-
-  // ---- horizontal, one axis at a time so walls slide instead of sticking ----
+  return g;
+}
+// is there a tall obstacle right in front? returns its outward normal or null
+function wallAhead(x,z,y,dx,dz){
+  const px=x+dx*0.5, pz=z+dz*0.5;
+  const c=hits(px, y+0.9, pz, PL.hw*0.8, 0.9);
+  if(c && (c.y1 - y) > 0.7){
+    // outward normal = dominant axis from collider centre to player
+    const cx=(c.x0+c.x1)/2, cz=(c.z0+c.z1)/2;
+    const ex=x-cx, ez=z-cz;
+    if(Math.abs(ex/(c.x1-c.x0)) > Math.abs(ez/(c.z1-c.z0))) return [Math.sign(ex)||1,0];
+    return [0, Math.sign(ez)||1];
+  }
+  // steep terrain wall?
+  const th=terrainH(px,pz);
+  if(th - y > 0.9){ const n=terrainNormal(px,pz); const l=Math.hypot(n[0],n[2])||1;
+    if(n[1] < 0.6) return [n[0]/l, n[2]/l]; }
+  return null;
+}
+// slide horizontally with step-up over low props
+function moveHoriz(dt){
+  const H=PL.h, hw=PL.hw;
   for(const ax of [0,1]){
-    const d = (ax===0 ? PL.vx : PL.vz)*dt;
-    if(Math.abs(d) < 1e-6) continue;
-    const nx = PL.x + (ax===0?d:0), nz = PL.z + (ax===0?0:d);
-    const c = hits(nx, PL.y, nz, PL.hw, h);
-    if(!c){ PL.x = nx; PL.z = nz; continue; }
-    // Step up onto low obstacles (stairs, kerbs, the plinth). The headroom probe
-    // ignores anything that is itself a steppable ledge — otherwise the next
-    // riser of a staircase, which sits at shin height in the player's column,
-    // reads as a ceiling and every step after the first is refused.
-    const rise = c.y1 - PL.y;
-    if(rise > 0.02 && rise <= 0.46){
-      const newFeet = c.y1 + 0.002;
-      const head = hits(nx, newFeet, nz, PL.hw, h);
-      if(!head || (head.y1 - newFeet) <= 0.46){
-        PL.x = nx; PL.z = nz; PL.y = newFeet; PL.onGround = true; PL.vy = 0;
-      } else if(ax===0) PL.vx = 0; else PL.vz = 0;
-    } else {
-      if(ax===0) PL.vx = 0; else PL.vz = 0;
-    }
-  }
-
-  // ---- ramp support (stairs) ----
-  // Snap onto the sloped surface whenever the feet are within a step of it, so
-  // steep stairs are walked smoothly instead of straddled tread by tread.
-  const rh = rampHeight(PL.x, PL.z);
-  if(rh !== null && PL.y < rh + 0.46 && PL.y > rh - 1.2){
-    if(!hits(PL.x, rh + 0.002, PL.z, PL.hw, h)){   // don't shove up into a real ceiling
-      PL.y = rh + 0.002; PL.onGround = true; if(PL.vy < 0) PL.vy = 0;
-    }
+    const d=(ax===0?PL.vx:PL.vz)*dt; if(Math.abs(d)<1e-6) continue;
+    const nx=PL.x+(ax===0?d:0), nz=PL.z+(ax===0?0:d);
+    const c=hits(nx, PL.y+0.35, nz, hw, H-0.35);
+    if(!c){ PL.x=nx; PL.z=nz; continue; }
+    const rise=c.y1-PL.y;
+    if(rise>0.05 && rise<=0.6 && !hits(nx, c.y1+0.05, nz, hw, H-0.1)){
+      PL.x=nx; PL.z=nz; PL.y=c.y1+0.01;
+    } else if(ax===0) PL.vx=0; else PL.vz=0;
   }
 }
 
 function updatePlayer(dt){
-  const wantCrouch = !!(keys['ControlLeft']||keys['ControlRight']||keys['KeyC']);
-  const canStand = !hits(PL.x, PL.y, PL.z, PL.hw, PL.hStand);
-  PL.crouch = clamp(PL.crouch + ((wantCrouch||!canStand)?1:-1)*dt*7.0, 0, 1);
+  const cy=Math.cos(CAM.yaw), sy=Math.sin(CAM.yaw);
+  let ix=0, iz=0;
+  if(keys['KeyW']) iz+=1; if(keys['KeyS']) iz-=1;
+  if(keys['KeyD']) ix+=1; if(keys['KeyA']) ix-=1;
+  const mag=Math.hypot(ix,iz); if(mag>0){ ix/=mag; iz/=mag; }
+  // camera-relative world move direction
+  const wx = sy*iz + cy*ix;
+  const wz = -cy*iz + sy*ix;
+  const wantMove = mag>0.01;
+  if(wantMove) PL.face = Math.atan2(wx, -wz);
 
-  const sprinting = !!keys['ShiftLeft'] && !wantCrouch;
-  PL.sprint = clamp(PL.sprint + (sprinting?1:-1)*dt*5.0, 0, 1);
-  const speed = lerp(lerp(2.55, 4.65, PL.sprint), 1.30, PL.crouch);
+  const gh = terrainH(PL.x, PL.z);
+  const submerged = (PL.y + 0.9) < WATER_Y;        // torso underwater
+  const deepWater = (WATER_Y - gh) > 1.3;
 
-  let fx = 0, fz = 0;
-  const frozen = GH.lock > 0;              // rooted to the spot in terror
-  if(!frozen){
-    if(keys['KeyW']) fz += 1;
-    if(keys['KeyS']) fz -= 1;
-    if(keys['KeyD']) fx += 1;
-    if(keys['KeyA']) fx -= 1;
+  const holdJump = !!keys['Space'];
+  const holdClimb = !!keys['ShiftLeft'] || !!keys['KeyE'];
+  const sprinting = holdClimb && PL.state==='ground';
+
+  // ---------- SWIM ----------
+  if(deepWater && submerged && PL.state!=='climb'){
+    PL.state='swim';
+    const spd = 3.2;
+    PL.vx = lerp(PL.vx, wx*spd, clamp(dt*4,0,1));
+    PL.vz = lerp(PL.vz, wz*spd, clamp(dt*4,0,1));
+    // bob at the surface
+    const target = WATER_Y - 0.9;
+    PL.vy = (target - PL.y)*4.0;
+    moveHoriz(dt); PL.y += PL.vy*dt;
+    PL.stamina = clamp(PL.stamina + dt*0.25, 0, 1);
+    PL.moving = wantMove?1:0; PL.anim += dt*(wantMove?3:1);
+    if(PL.splashT<=0 && wantMove){ SFX.step(0.4); PL.splashT=0.5; } PL.splashT-=dt;
+    return;
   }
-  const l = Math.hypot(fx,fz);
-  if(l > 0){ fx/=l; fz/=l; }
-  const sy = Math.sin(PL.yaw), cy = Math.cos(PL.yaw);
-  const wx = fz*sy + fx*cy;
-  const wz = -fz*cy + fx*sy;
-  const accel = PL.onGround ? 46.0 : 9.0;
-  PL.vx = lerp(PL.vx, wx*speed, clamp(accel*dt,0,1));
-  PL.vz = lerp(PL.vz, wz*speed, clamp(accel*dt,0,1));
-  if(PL.onGround && keys['Space']){ PL.vy = 5.55; PL.onGround = false; SFX.step(0.5); }
 
-  movePlayer(dt);
+  // ---------- CLIMB ----------
+  if(PL.state==='climb'){
+    let vUp=0, vSide=0;
+    if(keys['KeyW']) vUp+=1; if(keys['KeyS']) vUp-=1;
+    if(keys['KeyD']) vSide+=1; if(keys['KeyA']) vSide-=1;
+    const climbSpd=2.0;
+    // tangent along the wall (perpendicular to outward normal, horizontal)
+    const tx=-PL.cnz, tz=PL.cnx;
+    PL.x += tx*vSide*climbSpd*dt;
+    PL.z += tz*vSide*climbSpd*dt;
+    PL.y += vUp*climbSpd*dt;
+    // stick to the wall
+    PL.x -= PL.cnx*0.6*dt; PL.z -= PL.cnz*0.6*dt;
+    PL.vx=PL.vy=PL.vz=0;
+    const drain = (vUp!==0||vSide!==0)?0.09:0.03;
+    PL.stamina = clamp(PL.stamina - dt*drain, 0, 1);
+    PL.moving = (vUp||vSide)?1:0; PL.anim += dt*2.2;
+    // mantle: no wall ahead any more and there's ground to step onto
+    const still = wallAhead(PL.x, PL.z, PL.y, -PL.cnx, -PL.cnz);
+    if(!still || PL.y > (supportAt(PL.x-PL.cnx*0.7, PL.z-PL.cnz*0.7, PL.y+2, 2.5)-0.1)){
+      // top reached — hop over
+      PL.x -= PL.cnx*0.7; PL.z -= PL.cnz*0.7;
+      PL.y = supportAt(PL.x, PL.z, PL.y+2, 2.5)+0.02;
+      PL.state='ground'; PL.vy=0;
+    }
+    if(holdJump){ PL.state='air'; PL.vy=5.5; PL.vx=PL.cnx*3; PL.vz=PL.cnz*3; }
+    if(PL.stamina<=0){ PL.state='air'; PL.vy=0; }
+    if(PL.y < gh+0.1){ PL.y=gh; PL.state='ground'; }
+    return;
+  }
 
-  // head bob keyed to distance travelled, not to time
-  const gs = Math.hypot(PL.vx, PL.vz);
-  if(PL.onGround){
-    PL.bobT += gs*dt*2.05;
-    const amp = lerp(0.030, 0.055, PL.sprint) * clamp(gs/2.6, 0, 1);
-    PL.bob = lerp(PL.bob, Math.sin(PL.bobT*2.0)*amp - amp*0.5, clamp(dt*12,0,1));
-    PL.roll = lerp(PL.roll, Math.sin(PL.bobT)*0.0075*clamp(gs/2.6,0,1)*(1+PL.sprint), clamp(dt*10,0,1));
-    PL.stepAccum += gs*dt;
-    if(PL.stepAccum > 1.62){ PL.stepAccum = 0; SFX.step(clamp(gs/4.6,0.25,1)); }
+  // ---------- GROUND / AIR / GLIDE ----------
+  const onGround = PL.state==='ground';
+  PL.sprint = clamp(PL.sprint + (sprinting && wantMove?1:-1)*dt*4, 0, 1);
+  let spd = onGround ? lerp(4.2, 7.4, PL.sprint) : 5.2;
+  // sprint burns stamina; walking/standing regenerates
+  if(sprinting && wantMove && onGround){ PL.stamina=clamp(PL.stamina-dt*0.16,0,1); if(PL.stamina<=0) PL.sprint=0; }
+  else if(PL.state!=='glide') PL.stamina=clamp(PL.stamina+dt*0.35,0,1);
+
+  const acc = onGround?12:3.5;
+  PL.vx = lerp(PL.vx, wx*spd, clamp(acc*dt,0,1));
+  PL.vz = lerp(PL.vz, wz*spd, clamp(acc*dt,0,1));
+
+  // start climbing: pushing into a wall with stamina
+  if((onGround||PL.state==='air') && wantMove && PL.stamina>0.02){
+    const n=wallAhead(PL.x, PL.z, PL.y, wx, wz);
+    if(n){ PL.state='climb'; PL.cnx=n[0]; PL.cnz=n[1]; PL.vx=PL.vy=PL.vz=0; return; }
+  }
+
+  // gravity + glide
+  if(PL.state==='glide'){
+    PL.vy = -1.6;                                  // slow controlled descent
+    PL.stamina = clamp(PL.stamina - dt*0.12, 0, 1);
+    if(PL.stamina<=0 || onGround || !holdJump) PL.state='air';
   } else {
-    PL.bob = lerp(PL.bob, 0, clamp(dt*6,0,1));
-    PL.roll = lerp(PL.roll, 0, clamp(dt*6,0,1));
+    PL.vy -= 22.0*dt;
   }
-  PL.landKick = lerp(PL.landKick, 0, clamp(dt*7,0,1));
 
-  // lamp battery
-  if(PL.lamp && PL.batt > 0){
-    PL.batt = clamp(PL.batt - dt/240, 0, 1);
-    if(PL.batt <= 0){ PL.lamp = false; toast('Lamp cell exhausted — let it recover'); }
-  } else if(!PL.lamp){
-    PL.batt = clamp(PL.batt + dt/150, 0, 1);
+  moveHoriz(dt);
+  PL.y += PL.vy*dt;
+
+  // ground contact
+  const support = supportAt(PL.x, PL.z, PL.y+0.3, 0.5);
+  if(PL.y <= support + 0.02){
+    PL.y = support; PL.vy = 0;
+    if(PL.state!=='ground'){ PL.state='ground'; if(PL.splashT<=0){ SFX.step(0.6); PL.splashT=0.2; } }
+    PL.coyote = 0.12;
+  } else {
+    PL.coyote -= dt;
+    if(PL.state==='ground'){ PL.state = (PL.coyote>0)?'ground':'air'; }
+    if(PL.state==='ground' && PL.coyote<=0) PL.state='air';
   }
-  // a dying cell stutters
-  const lowness = smoothstep(0.22, 0.0, PL.batt);
-  PL.lampFlick = PL.lamp ? clamp(1 - lowness*(0.5+0.5*Math.sin(now*23.0)) *
-                                 (Math.random()<0.06?1:0.35), 0.05, 1) : 0;
+
+  // jump (with a little coyote time)
+  if(holdJump && (PL.state==='ground' || PL.coyote>0)){
+    PL.vy = 6.6; PL.state='air'; PL.coyote=0; SFX.step(0.5);
+  }
+  // deploy the paraglider in the air
+  if(holdJump && PL.state==='air' && PL.vy < 0.5 && PL.stamina>0.05 && (PL.y-support)>1.5){
+    PL.state='glide';
+  }
+
+  // wade slowdown in shallow water
+  if(PL.y < WATER_Y && !deepWater){ PL.vx*=0.6; PL.vz*=0.6; }
+
+  // animation + footsteps
+  const gs=Math.hypot(PL.vx,PL.vz);
+  PL.moving = onGround ? clamp(gs/6,0,1) : 0;
+  PL.gaitAmp = lerp(PL.gaitAmp, PL.moving, clamp(dt*8,0,1));
+  PL.anim += dt*(3.2 + PL.sprint*3.5)*PL.moving + dt*0.6;
+  PL.stepT -= dt;
+  if(PL.state==='ground' && gs>1.5 && PL.stepT<=0){ SFX.step(clamp(gs/7,0.25,0.8)); PL.stepT=lerp(0.5,0.3,PL.sprint); }
+  PL.splashT-=dt;
 }
 
-function viewDir(out){
-  const cp = Math.cos(PL.pitch), sp = Math.sin(PL.pitch);
-  out[0] = cp*Math.sin(PL.yaw); out[1] = sp; out[2] = -cp*Math.cos(PL.yaw);
-  return out;
-}
+function viewDir(out){ out[0]=Math.sin(PL.face); out[1]=0; out[2]=-Math.cos(PL.face); return out; }
 
 /* ==========================================================================
    AUDIO — everything synthesised, nothing loaded
@@ -3047,8 +3032,9 @@ const SFX = (()=>{
     fadeIn(){ if(ready) master.gain.linearRampToValueAtTime(0.85, ac.currentTime+2.2); },
     setRain(v){ if(ready) rainG.gain.setTargetAtTime(clamp(v,0,1)*0.24, ac.currentTime, 0.4); },
     setHum(v){ if(ready) humG.gain.setTargetAtTime(clamp(v,0,1)*0.022, ac.currentTime, 0.8); },
-    step(v){ burst(0.16, 900+Math.random()*700, 1.1, 0.16*v); burst(0.30, 260, 0.7, 0.07*v, 'lowpass'); },
-    pickup(){ tone(880, 0.5, 0.12, 'sine'); tone(1320, 0.42, 0.07, 'sine'); tone(660, 0.7, 0.05, 'triangle'); },
+    step(v){ burst(0.12, 700+Math.random()*500, 1.0, 0.10*v, 'lowpass'); },
+    pickup(){ tone(880, 0.35, 0.10, 'sine'); tone(1320, 0.3, 0.06, 'sine'); },
+    chime(){ tone(659,0.5,0.10,'sine'); tone(988,0.55,0.09,'sine',988); setTimeout(()=>{tone(1319,0.7,0.08,'sine');},140); },
     seat(){ burst(0.22, 180, 0.8, 0.30, 'lowpass'); tone(70, 0.5, 0.16, 'square', 46); },
     power(){ tone(58, 2.4, 0.14, 'sawtooth', 116); burst(0.9, 900, 0.5, 0.10, 'lowpass'); },
     deny(){ tone(150, 0.16, 0.09, 'square', 90); },
@@ -3124,82 +3110,115 @@ function toast(msg, ms){
   toast._t = setTimeout(()=>el.classList.remove('on'), ms||3400);
 }
 function refreshHUD(){
-  if(won){
-    els('objTxt').textContent = 'Out.';
-    els('objSub').textContent = 'You made it to the garden. Keep walking.';
-  } else {
-    els('objTxt').textContent = 'Get out of the house';
-    els('objSub').textContent = 'Find a way out. You are not alone in here.';
-  }
-}
-// rough "am I standing in light?" proxy — eases dread near a live flame/lamp
-function sectorLit(){
-  let best = 0;
-  for(let i=0;i<lights.length;i++){
-    const L = lights[i]; if(L.lit < 0.15) continue;
-    const d2 = (L.x-PL.x)*(L.x-PL.x) + (L.z-PL.z)*(L.z-PL.z);
-    if(d2 < 25){ best = Math.max(best, L.lit * (1 - Math.sqrt(d2)/5)); }
-  }
-  return clamp(best, 0, 1);
+  els('objTxt').textContent = 'Explore the expanse';
+  els('objSub').textContent = 'Raise the towers · seek the shrines · go anywhere';
 }
 function sectorName(){
-  const x=PL.x, z=PL.z;
-  if(PL.y > 2.6) return 'UPSTAIRS';
-  if(z > 16){ return x<-9?'LIBRARY': x>9?'DINING ROOM':'ENTRANCE FOYER'; }
-  if(z > -2){ return x<-9?'DRAWING ROOM': x>9?'STUDY':'GREAT HALL'; }
-  return x<-9?'KITCHEN': x>9?'BALLROOM':'REAR HALL';
+  const h = terrainH(PL.x,PL.z);
+  if(PL.state==='swim') return 'THE WATER';
+  if(h > 30) return 'THE MOUNTAIN';
+  if(Math.hypot(PL.x-95,PL.z-78) < 90) return 'HIGHLANDS';
+  if(Math.hypot(PL.x+82,PL.z+66) < 70) return 'LAKE COUNTRY';
+  if(PL.z > 20) return 'NORTH WOODS';
+  return 'THE MEADOWS';
 }
 
-/* interaction target under the crosshair */
-const _vd = [0,0,0];
-function pickTarget(){
-  viewDir(_vd);
-  const ex = PL.x, ey = eyeY(), ez = PL.z;
-  let best = null, bestDp = -1;
-  for(const c of cells){
-    if(c.taken) continue;
-    const dx=c.x-ex, dy=(c.y+0.18)-ey, dz=c.z-ez;
-    const d = Math.hypot(dx,dy,dz);
-    if(d > 3.1) continue;
-    const dp = (dx*_vd[0]+dy*_vd[1]+dz*_vd[2])/Math.max(d,1e-4);
-    // the closer you are, the sloppier the aim is allowed to be
-    const need = 0.955 - clamp((3.1-d)*0.05, 0, 0.14);
-    if(dp > need && dp > bestDp){ bestDp = dp; best = {kind:'cell', cell:c, d}; }
-  }
-  if(!best && breaker){
-    const dx=breaker.x-ex, dy=breaker.y-ey, dz=breaker.z-ez;
-    const d = Math.hypot(dx,dy,dz);
-    if(d < breaker.r){
-      const dp = (dx*_vd[0]+dy*_vd[1]+dz*_vd[2])/Math.max(d,1e-4);
-      if(dp > 0.80) best = {kind:'breaker', d};
+/* discovery loop + pickups + interaction prompts */
+function updateWorld(dt){
+  // survey towers — raise by reaching the platform up top
+  for(const t of towers){
+    if(t.up) continue;
+    if(Math.abs(PL.x-t.x)<t.r && Math.abs(PL.z-t.z)<t.r && PL.y > t.top-1.0){
+      t.up = true; discovered++;
+      SFX.chime(); toast('Survey tower raised — the map opens up', 4200);
+      refreshCount();
     }
   }
-  return best;
+  // shrines — discover by drawing near
+  for(const s of shrines){
+    if(s.found) continue;
+    if(Math.hypot(PL.x-s.x, PL.z-s.z) < s.r && Math.abs(PL.y-s.y) < 4){
+      s.found = true; discovered++;
+      SFX.chime(); toast('A shrine wakes at your approach', 4200);
+      refreshCount();
+    }
+  }
+  // pickable fruit
+  for(const pk of pickups){
+    if(pk.got) continue;
+    if(Math.hypot(PL.x-pk.x, PL.z-pk.z) < 1.4 && Math.abs(PL.y+1.0-pk.y) < 2.2){
+      pk.got = true; seeds++; SFX.pickup(); refreshCount();
+    }
+  }
 }
-function interact(){
-  const t = pickTarget();
-  if(!t) return;
-  if(t.kind === 'cell'){
-    t.cell.taken = true;
-    carried++;
-    SFX.pickup();
-    toast('Fuse cell recovered — '+t.cell.where);
-    refreshHUD();
-  } else if(t.kind === 'breaker'){
-    if(carried <= 0){ SFX.deny(); toast('Nothing to seat. Find a cell first.'); return; }
-    carried--; installed++;
-    SFX.seat();
-    setTimeout(()=>SFX.power(), 260);
-    const BANKNAME = ['plinth lamps','west colonnade','east colonnade',
-                      'gallery strips','generator room','dome floods'];
-    toast('Breaker '+installed+' seated — '+BANKNAME[installed-1]+' online');
-    // set `won` BEFORE refreshing, or the last seat still reads "find the cells"
-    if(installed >= 6 && !won){
-      won = true;
-      setTimeout(()=>{ els('done').classList.add('on'); }, 2600);
+function refreshCount(){
+  const total = towers.length + shrines.length;
+  els('telSec2') && (els('telSec2').textContent = discovered+' / '+total);
+  els('telSeed') && (els('telSeed').textContent = String(seeds));
+}
+function interact(){ /* discovery is proximity-based; E reserved for future use */ }
+
+/* ---- stamina ring ---- */
+let _sctx=null;
+function drawStamina(){
+  const cv2=els('stam'); if(!cv2) return; _sctx=_sctx||cv2.getContext('2d');
+  const g=_sctx, W=cv2.width, H=cv2.height, cx=W/2, cy=H/2, r=42;
+  g.clearRect(0,0,W,H);
+  const s=clamp(PL.stamina,0,1);
+  const spending = (PL.state==='climb'||PL.state==='glide'||(PL.sprint>0.2&&PL.moving>0.1));
+  if(s>=0.999 && !spending) return;                      // hide when full & idle
+  g.lineWidth=7; g.lineCap='round';
+  g.strokeStyle='rgba(0,0,0,.35)'; g.beginPath(); g.arc(cx,cy,r,0,TAU); g.stroke();
+  const a0=-Math.PI*0.5, a1=a0+TAU*s;
+  g.strokeStyle = s<0.28 ? '#ff7a3c' : '#8ff08a';
+  g.beginPath(); g.arc(cx,cy,r,a0,a1); g.stroke();
+}
+
+/* ---- minimap: a precomputed world image, cropped around the player ---- */
+let MINI=null;
+function buildMiniBase(){
+  const S=300; const c=document.createElement('canvas'); c.width=S; c.height=S;
+  const g=c.getContext('2d'); const img=g.createImageData(S,S); const d=img.data;
+  for(let j=0;j<S;j++) for(let i=0;i<S;i++){
+    const wx=-WORLD+ (i/S)*2*WORLD, wz=-WORLD+ (j/S)*2*WORLD;
+    const h=terrainH(wx,wz); let r,gc,b;
+    if(h < WATER_Y){ r=40; gc=95; b=150; }               // water
+    else { const n=terrainNormal(wx,wz); const slope=1-n[1];
+      if(h>30){ r=225;gc=232;b=240; }                    // snow
+      else if(slope>0.5){ r=120;gc=110;b=98; }           // rock
+      else if(h<WATER_Y+1.4){ r=170;gc=150;b=100; }      // sand
+      else { r=70+h*1.5; gc=120+h*1.2; b=55; }           // grass
     }
-    refreshHUD();
+    const o=(j*S+i)*4; d[o]=r; d[o+1]=gc; d[o+2]=b; d[o+3]=255;
   }
+  g.putImageData(img,0,0); MINI=c;
+}
+let _mctx=null;
+function drawMinimap(){
+  const cv2=els('mini'); if(!cv2||!MINI) return; _mctx=_mctx||cv2.getContext('2d');
+  const g=_mctx, W=cv2.width, H=cv2.height;
+  const view=170;                                        // world metres shown across
+  const ppm=W/view;                                      // pixels per metre
+  g.save();
+  g.beginPath(); g.arc(W/2,H/2,W/2,0,TAU); g.clip();
+  g.fillStyle='#1a241a'; g.fillRect(0,0,W,H);
+  // draw the world image cropped around the player (north up)
+  const src = MINI.width/(2*WORLD);                      // src px per world metre
+  const sw = view*src, sh = view*src;
+  const sx = (PL.x+WORLD)*src - sw/2, sy = (PL.z+WORLD)*src - sh/2;
+  g.drawImage(MINI, sx,sy,sw,sh, 0,0,W,H);
+  // markers
+  const toXY=(x,z)=>[ W/2+(x-PL.x)*ppm, H/2+(z-PL.z)*ppm ];
+  for(const t of towers){ const [mx,my]=toXY(t.x,t.z);
+    g.fillStyle=t.up?'#7cd2ff':'rgba(255,255,255,.5)'; g.beginPath(); g.arc(mx,my,4,0,TAU); g.fill();
+    g.strokeStyle='#0a1620'; g.stroke(); }
+  for(const s of shrines){ const [mx,my]=toXY(s.x,s.z);
+    g.fillStyle=s.found?'#ffb040':'rgba(255,220,150,.4)'; g.beginPath(); g.arc(mx,my,3.5,0,TAU); g.fill(); }
+  // player arrow
+  g.save(); g.translate(W/2,H/2); g.rotate(PL.face);
+  g.fillStyle='#fff'; g.beginPath(); g.moveTo(0,-7); g.lineTo(5,6); g.lineTo(0,3); g.lineTo(-5,6); g.closePath(); g.fill();
+  g.restore();
+  g.restore();
 }
 
 /* ==========================================================================
@@ -3361,8 +3380,8 @@ const M = {
   sunView:m4.create(), sunProj:m4.create(), sunVP:m4.create(),
   spotView:m4.create(), spotProj:m4.create(), spotVP:m4.create()
 };
-const SUN = (()=>{ const d=[-0.30,0.80,0.52], l=Math.hypot(d[0],d[1],d[2]); return [d[0]/l,d[1]/l,d[2]/l]; })();
-const SUN_COL = [0.30,0.375,0.50];
+const SUN = (()=>{ const d=[0.42,0.72,0.55], l=Math.hypot(d[0],d[1],d[2]); return [d[0]/l,d[1]/l,d[2]/l]; })();
+const SUN_COL = [2.7,2.5,2.05];      // bright warm daylight
 const SPOT = { px:0,py:0,pz:0, dx:0,dy:0,dz:-1 };
 const HALTON = (()=>{
   const h=(i,b)=>{ let f=1,r=0; while(i>0){ f/=b; r+=f*(i%b); i=(i/b)|0; } return r; };
@@ -3436,81 +3455,118 @@ function updateLights(dt){
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 4, MAXL, gl.RGBA, gl.FLOAT, D);
 }
 
+/* ---- the traveller: stylised body assembled from primitives, walk-animated -- */
+const SKIN=[0.86,0.66,0.5], TUNIC=[0.16,0.42,0.72], TRIM=[0.9,0.82,0.3],
+      TROUS=[0.55,0.46,0.32], BOOT=[0.28,0.18,0.1], HAIR=[0.7,0.55,0.28];
+function limbInstance(mesh, hx,hy,hz, faceYaw, swing, len, rad, mat, tint){
+  // a limb hanging from a pivot, swung about the facing-frame X axis
+  const ly=-Math.cos(swing)*len*0.5, lz=Math.sin(swing)*len*0.5;
+  const sy=Math.sin(faceYaw), cyw=Math.cos(faceYaw);
+  addDyn(mesh, hx+lz*sy, hy+ly, hz+lz*cyw, swing, faceYaw, 0, rad, len*0.5, rad, mat,
+         {uv:3, tint, rough:0.9});
+}
+function drawCharacter(){
+  const f=PL.face, s=Math.sin(f), c=Math.cos(f);
+  const gait=PL.gaitAmp, ph=PL.anim;
+  const bob = PL.state==='ground' ? Math.abs(Math.sin(ph))*0.05*gait : 0;
+  const hy = PL.y + bob;
+  const glide = PL.state==='glide', climb=PL.state==='climb', swim=PL.state==='swim';
+  const lean = glide?0.5:(swim?1.2:0.0);           // pitch the torso forward
+  // hips/shoulders anchor
+  const hipY = hy+0.86, shY = hy+1.34;
+  // legs (swing opposite phase)
+  const legSw = Math.sin(ph)*0.7*gait;
+  limbInstance('cyl8', PL.x+ -c*0.14, hipY, PL.z+ s*0.14, f,  legSw, 0.9, 0.11, MAT.PAINT, TROUS);
+  limbInstance('cyl8', PL.x+  c*0.14, hipY, PL.z+ -s*0.14, f, -legSw, 0.9, 0.11, MAT.PAINT, TROUS);
+  // boots
+  addDyn('boxr', PL.x-c*0.14 + Math.sin(legSw)*0.3*s, hy+0.06, PL.z+s*0.14+Math.sin(legSw)*0.3*c, 0,f,0, 0.11,0.07,0.16, MAT.PAINT,{uv:4,tint:BOOT});
+  addDyn('boxr', PL.x+c*0.14 - Math.sin(legSw)*0.3*s, hy+0.06, PL.z-s*0.14-Math.sin(legSw)*0.3*c, 0,f,0, 0.11,0.07,0.16, MAT.PAINT,{uv:4,tint:BOOT});
+  // torso + tunic skirt
+  addDyn('boxr', PL.x, hy+1.05, PL.z, lean,f,0, 0.24,0.30,0.16, MAT.PAINT, {uv:3, tint:TUNIC, rough:0.9});
+  addDyn('cone', PL.x, hy+0.82, PL.z, Math.PI+lean*0.2, f, 0, 0.30,0.26,0.24, MAT.PAINT, {uv:3, tint:TUNIC});
+  addDyn('boxr', PL.x, hy+0.82, PL.z+0.001, 0,f,0, 0.26,0.05,0.17, MAT.PAINT, {uv:4, tint:TRIM});
+  // arms
+  const armSw = glide? -2.4 : (climb? Math.sin(ph)*0.3-1.6 : -Math.sin(ph)*0.6*gait);
+  limbInstance('cyl8', PL.x-c*0.28, shY, PL.z+s*0.28, f, armSw, 0.72, 0.075, MAT.PAINT, TUNIC);
+  limbInstance('cyl8', PL.x+c*0.28, shY, PL.z-s*0.28, f, glide?-2.4:armSw*-1, 0.72, 0.075, MAT.PAINT, TUNIC);
+  // head + hair + cap
+  const hd = hy+1.62;
+  addDyn('sph', PL.x, hd, PL.z, 0,f,0, 0.16,0.18,0.16, MAT.PAINT, {uv:3, tint:SKIN, rough:0.85});
+  addDyn('sph', PL.x-s*0.02, hd+0.06, PL.z-c*0.02, 0,f,0, 0.17,0.15,0.17, MAT.PAINT,{uv:3,tint:HAIR});
+  addDyn('cone', PL.x, hd+0.16, PL.z, 0,f,0, 0.19,0.22,0.19, MAT.PAINT, {uv:3, tint:TUNIC});
+  // paraglider canopy overhead when gliding
+  if(glide){
+    addDyn('cone', PL.x-s*0.1, hy+2.7, PL.z-c*0.1, Math.PI, f, 0, 1.5,0.5,0.9, MAT.PAINT,
+           {uv:2, tint:[0.85,0.5,0.2]});
+  }
+}
+
 /* ---- everything that moves, rebuilt as instances each frame ---- */
 function buildDynamic(){
   clearDynamic();
-  // live flames — fire, candles, sconces. Small emissive spheres that gutter,
-  // dimmed by the blackout so the whole house can drop dark.
-  const bo = 1 - blackout*0.92;
+  drawCharacter();
+  // camp-fire / shrine / tower glow flames
   for(let i=0;i<flames.length;i++){
     const f = flames[i];
-    const fl = (0.6 + 0.4*Math.sin(now*(9+i%5) + i) + 0.25*Math.sin(now*23.0 + i*1.7)) * bo;
-    if(fl < 0.05) continue;
+    const fl = (0.7 + 0.3*Math.sin(now*(9+i%5) + i) + 0.2*Math.sin(now*23.0 + i*1.7));
     const s = f.s * (0.8 + 0.3*fl);
     const sway = f.big ? Math.sin(now*3.1+i)*0.02 : Math.sin(now*5.0+i)*0.01;
+    const col = f.warm ? [1.0, 0.5+0.12*fl, 0.16] : [0.4,0.8,1.0];
     addDyn('sph', f.x+sway, f.y + (f.big?0.1:0.04)*fl, f.z, 0,0,0, s, s*(f.big?1.7:1.5), s,
-           MAT.GLASS, {uv:4, emissive: (f.big?2.8:1.5)*fl, tint:[1.0, 0.42+0.12*fl, 0.14], rough:0.4, seed:i+1});
+           MAT.GLASS, {uv:4, emissive: (f.big?2.8:2.0)*fl, tint:col, rough:0.4, seed:i+1});
   }
+  // floating pickable fruit
+  for(let i=0;i<pickups.length;i++){ const pk=pickups[i]; if(pk.got) continue;
+    const bobp=Math.sin(now*1.6+i)*0.12;
+    addDyn('sph', pk.x, pk.y+bobp, pk.z, 0,now*0.8,0, 0.16,0.16,0.16, MAT.GLASS,
+           {uv:4, emissive:1.8, tint:[1.0,0.75,0.2], rough:0.4, seed:200+i}); }
   uploadDynamic();
 }
 
 function render(dt){
   const W = R.W, H = R.H, Q = QUALITY[R.q];
 
-  /* ---- camera (with terror shake baked into the view only, not the aim) ---- */
-  const shk = GH.shake;
-  const syaw = PL.yaw   + (shk>0 ? (Math.sin(now*77.0)+Math.sin(now*51.0))*0.5*0.045*shk : 0);
-  const spit = PL.pitch + (shk>0 ? (Math.sin(now*83.0)+Math.sin(now*61.0))*0.5*0.045*shk : 0);
-  const _cp = Math.cos(spit), _sp = Math.sin(spit);
-  const dir = [ _cp*Math.sin(syaw), _sp, -_cp*Math.cos(syaw) ];
-  const ex = PL.x + (shk>0 ? Math.sin(now*67.0)*0.05*shk : 0);
-  const ey = eyeY() + (shk>0 ? Math.sin(now*71.0)*0.05*shk : 0);
-  const ez = PL.z + (shk>0 ? Math.cos(now*59.0)*0.05*shk : 0);
-  const fov = (68 + PL.sprint*4.5 + GH.charge*8.0) * DEG;
-  m4.persp(M.proj, fov, W/H, 0.055, 260);
-  m4.copy(M.projJ, M.proj);
-  if(Q.taa){
-    const j = HALTON[frameNo & 15];
-    M.projJ[8] += (j[0]*2.0)/W;
-    M.projJ[9] += (j[1]*2.0)/H;
+  /* ---- third-person orbit camera ---- */
+  const focusY = PL.y + 1.4;
+  const cp = Math.cos(CAM.pitch), sp = Math.sin(CAM.pitch);
+  // desired eye = behind the focus along the camera yaw, lifted by pitch
+  let want = CAM.dist;
+  let dx = -Math.sin(CAM.yaw)*cp, dz = Math.cos(CAM.yaw)*cp, dy = sp;
+  // pull the camera in if terrain/props would clip it
+  for(let s=1;s<=6;s++){ const t=want*s/6;
+    const cxp=PL.x+dx*t, cyp=focusY+dy*t, czp=PL.z+dz*t;
+    if(cyp < terrainH(cxp,czp)+0.4 || hits(cxp,cyp,czp,0.2,0.2)){ want=t-0.4; break; }
   }
-  // roll the up-vector for the walk sway
-  const rr = PL.roll;
-  const rx = Math.cos(PL.yaw), rz = Math.sin(PL.yaw);
-  const upx = -rx*Math.sin(rr), upy = Math.cos(rr), upz = -rz*Math.sin(rr);
-  m4.lookAt(M.view, ex,ey,ez, ex+dir[0], ey+dir[1], ez+dir[2], upx,upy,upz);
+  want = Math.max(1.6, want);
+  const ex = PL.x + dx*want, ey = focusY + dy*want, ez = PL.z + dz*want;
+  CAM.x=ex; CAM.y=ey; CAM.z=ez;
+  const dir = [ PL.x-ex, focusY-ey, PL.z-ez ];
+  const dl = Math.hypot(dir[0],dir[1],dir[2])||1; dir[0]/=dl; dir[1]/=dl; dir[2]/=dl;
+  const fov = (58 + PL.sprint*5) * DEG;
+  m4.persp(M.proj, fov, W/H, 0.08, 700);
+  m4.copy(M.projJ, M.proj);
+  if(Q.taa){ const j=HALTON[frameNo&15]; M.projJ[8]+=(j[0]*2.0)/W; M.projJ[9]+=(j[1]*2.0)/H; }
+  m4.lookAt(M.view, ex,ey,ez, PL.x,focusY,PL.z, 0,1,0);
   m4.mul(M.vp,  M.proj,  M.view);
   m4.mul(M.vpJ, M.projJ, M.view);
   m4.invert(M.invVP,   M.vpJ);
   m4.invert(M.invProj, M.projJ);
   m4.invert(M.invView, M.view);
 
-  /* ---- moon shadow: follows the player so the whole mansion stays covered
-          at a usable texel density (a fixed box over 56x46 m would be mush) ---- */
-  const cxs = clamp(PL.x,-22,22), cys = 3, czs = clamp(PL.z,-16,22);
-  m4.lookAt(M.sunView, cxs+SUN[0]*60, cys+SUN[1]*60, czs+SUN[2]*60, cxs,cys,czs, 0,1,0);
-  m4.ortho(M.sunProj, -26,26, -24,24, 0.5, 130);
+  /* ---- sun shadow: a box following the player, big enough for the vista ---- */
+  const cxs = PL.x, cys = PL.y, czs = PL.z;
+  m4.lookAt(M.sunView, cxs+SUN[0]*120, cys+SUN[1]*120, czs+SUN[2]*120, cxs,cys,czs, 0,1,0);
+  m4.ortho(M.sunProj, -46,46, -46,46, 0.5, 260);
   m4.mul(M.sunVP, M.sunProj, M.sunView);
 
-  /* ---- flashlight rig, trailing the head slightly ---- */
-  const lampOn = (PL.lamp && PL.batt > 0) ? PL.lampFlick : 0;
-  const hx = ex + rx*0.22 - dir[0]*0.05;
-  const hy = ey - 0.16;
-  const hz = ez + rz*0.22 - dir[2]*0.05;
-  const k = clamp(dt*13, 0, 1);
-  SPOT.px = lerp(SPOT.px, hx, k); SPOT.py = lerp(SPOT.py, hy, k); SPOT.pz = lerp(SPOT.pz, hz, k);
-  SPOT.dx = lerp(SPOT.dx, dir[0], k*0.75);
-  SPOT.dy = lerp(SPOT.dy, dir[1], k*0.75);
-  SPOT.dz = lerp(SPOT.dz, dir[2], k*0.75);
-  const sl = Math.hypot(SPOT.dx,SPOT.dy,SPOT.dz)||1;
-  const sdx=SPOT.dx/sl, sdy=SPOT.dy/sl, sdz=SPOT.dz/sl;
-  m4.lookAt(M.spotView, SPOT.px,SPOT.py,SPOT.pz,
-            SPOT.px+sdx, SPOT.py+sdy, SPOT.pz+sdz, 0,1,0);
-  m4.persp(M.spotProj, 62*DEG, 1, 0.10, 32);
+  // flashlight retired — keep the spot matrices valid but dark
+  const lampOn = 0;
+  const sdx=0, sdy=-1, sdz=0;
+  m4.lookAt(M.spotView, 0,999,0, 0,998,0, 0,0,1);
+  m4.persp(M.spotProj, 60*DEG, 1, 0.1, 10);
   m4.mul(M.spotVP, M.spotProj, M.spotView);
-
   const COS_IN = Math.cos(14*DEG), COS_OUT = Math.cos(29*DEG);
-  const SPOT_COL = [1.0*13, 0.945*13, 0.86*13];
+  const SPOT_COL = [0,0,0];
 
   /* ================= PASS 1/2 — shadow maps ================= */
   gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.depthFunc(gl.LESS);
@@ -3540,7 +3596,8 @@ function render(dt){
   um4(R.P.gbuf,'uPrevVPn', frameNo ? M.prevVP : M.vp);
   u3f(R.P.gbuf,'uCam', ex,ey,ez);
   u1f(R.P.gbuf,'uTime', now);
-  u1f(R.P.gbuf,'uWetness', 1.0);
+  u1f(R.P.gbuf,'uWetness', 0.0);
+  u1f(R.P.gbuf,'uWaterY', WATER_Y);
   u1i(R.P.gbuf,'uGDebug', R.gdebug|0);
   bindTex(R.P.gbuf,'uAlb', 0, R.matAlb, gl.TEXTURE_2D_ARRAY);
   bindTex(R.P.gbuf,'uNrm', 1, R.matNrm, gl.TEXTURE_2D_ARRAY);
@@ -3580,26 +3637,26 @@ function render(dt){
   um4(p,'uInvVP',M.invVP);
   u2f(p,'uRes',W,H);
   u3f(p,'uCam',ex,ey,ez);
-  const flashBoost = 1 + flash*7.0;
   u3f(p,'uSunDir',SUN[0],SUN[1],SUN[2]);
-  u3f(p,'uSunCol',SUN_COL[0]*flashBoost,SUN_COL[1]*flashBoost,SUN_COL[2]*flashBoost);
+  u3f(p,'uSunCol',SUN_COL[0],SUN_COL[1],SUN_COL[2]);
   um4(p,'uSunVP',M.sunVP);
   u2f(p,'uSunTexel',1/R.sunFBO.w,1/R.sunFBO.h);
   u3f(p,'uSpotPos',SPOT.px,SPOT.py,SPOT.pz);
   u3f(p,'uSpotDir',sdx,sdy,sdz);
-  u3f(p,'uSpotCol',SPOT_COL[0],SPOT_COL[1],SPOT_COL[2]);
-  u4f(p,'uSpotPar',COS_IN,COS_OUT,32.0,lampOn);
+  u3f(p,'uSpotCol',0,0,0);
+  u4f(p,'uSpotPar',COS_IN,COS_OUT,32.0,0.0);       // flashlight retired for daylight
   um4(p,'uSpotVP',M.spotVP);
   u2f(p,'uSpotTexel',1/R.spotFBO.w,1/R.spotFBO.h);
-  const amb = 1 + installed*0.34 + flash*3.0;
-  u3f(p,'uAmbSky',0.0130*amb,0.0168*amb,0.0245*amb);
-  u3f(p,'uAmbGnd',0.0052*amb,0.0056*amb,0.0062*amb);
+  // bright sky/ground hemisphere ambient for an outdoor day
+  u3f(p,'uAmbSky',0.42,0.52,0.66);
+  u3f(p,'uAmbGnd',0.20,0.20,0.16);
   u1f(p,'uEnvMip',R.envMips-1);
-  u1f(p,'uEnvGain',1.0+flash*4.0);
+  u1f(p,'uEnvGain',1.0);
   u1i(p,'uNL',R.nActive);
   u1f(p,'uSkyTime',now);
-  u1f(p,'uFlash',flash);
-  u1f(p,'uDiscPow',220.0);  u1f(p,'uDiscAmp',3.2);   // sharp moon on screen
+  u1f(p,'uFlash',0.0);
+  u1f(p,'uDiscPow',350.0);  u1f(p,'uDiscAmp',3.0);
+  u3f(p,'uSunDirSky',SUN[0],SUN[1],SUN[2]);
   u1i(p,'uLView', R.lview|0);
   drawQuad();
 
@@ -3649,7 +3706,7 @@ function render(dt){
     u2f(v,'uRes',W>>1,H>>1);
     u3f(v,'uCam',ex,ey,ez);
     u3f(v,'uSunDir',SUN[0],SUN[1],SUN[2]);
-    u3f(v,'uSunCol',SUN_COL[0]*flashBoost,SUN_COL[1]*flashBoost,SUN_COL[2]*flashBoost);
+    u3f(v,'uSunCol',SUN_COL[0],SUN_COL[1],SUN_COL[2]);
     u3f(v,'uSpotPos',SPOT.px,SPOT.py,SPOT.pz);
     u3f(v,'uSpotDir',sdx,sdy,sdz);
     u3f(v,'uSpotCol',SPOT_COL[0]/13,SPOT_COL[1]/13,SPOT_COL[2]/13);
@@ -3669,34 +3726,9 @@ function render(dt){
     gl.disable(gl.BLEND);
   }
 
-  /* ================= PASS 8 — rain (forward, depth tested) ================= */
+  /* (rain/apparition forward passes retired for the open world) ---- */
   bindFBO(R.hdrFBOd);
-  gl.enable(gl.DEPTH_TEST); gl.depthMask(false); gl.depthFunc(gl.LEQUAL);
-  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-  gl.disable(gl.CULL_FACE);
-  gl.useProgram(R.P.rain);
-  const rp = R.P.rain;
-  um4(rp,'uVP',M.vpJ);
-  u3f(rp,'uCam',ex,ey,ez);
-  u3f(rp,'uRight',rx,0,rz);
-  u3f(rp,'uUp',0,1,0);
-  u1f(rp,'uTime',now);
-  u4f(rp,'uShaft', 2.0, 7.0, 3.6, HALL_H);        // a leak through the great-hall roof
-  u1f(rp,'uStreak',0.55);
-  u1f(rp,'uPxScale', 2.0*Math.tan(fov*0.5)/H);   // world units per pixel per unit depth
-  u3f(rp,'uSpotPos',SPOT.px,SPOT.py,SPOT.pz);
-  u3f(rp,'uSpotDir',sdx,sdy,sdz);
-  u3f(rp,'uSpotCol',SPOT_COL[0]/13,SPOT_COL[1]/13,SPOT_COL[2]/13);
-  u4f(rp,'uSpotPar',COS_IN,COS_OUT,32.0,lampOn);
-  u3f(rp,'uShaftCol',0.30,0.40,0.55);
-  u1f(rp,'uMoonGain',0.85+flash*6.0);
-  const rr2 = meshes.bb;
-  gl.bindVertexArray(rr2.vaoBare);       // rain builds its own instances in the VS
-  gl.drawElementsInstanced(gl.TRIANGLES, rr2.count, rr2.type, 0, Q.rain);
-  gl.bindVertexArray(null);
-
-  /* ---- the apparition (forward, premultiplied alpha, double-sided) ---- */
-  if(ghostFrame()){
+  if(false && ghostFrame()){
     gl.enable(gl.DEPTH_TEST); gl.depthMask(false); gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -3803,66 +3835,8 @@ function loop(t){
 
   if(!paused){
     updatePlayer(dt);
-
-    // storm
-    nextBolt -= dt;
-    if(nextBolt <= 0){
-      boltStage = 1;
-      flash = 0.85 + Math.random()*0.6;
-      const dist = Math.random();
-      SFX.thunder(dist);
-      setTimeout(()=>{ flash = Math.max(flash, 0.5+Math.random()*0.5); }, 90+Math.random()*140);
-      nextBolt = 9 + Math.random()*18;
-    }
-    flash = Math.max(0, flash - dt*(4.5 + flash*3.0));
-
-    // storm heard against the windows, everywhere
-    SFX.setRain(0.55);
-
-    // the mansion is dark; the flashlight is your only real light
-    targetExposure = 1.72;
-    exposure = lerp(exposure, targetExposure, clamp(dt*0.55,0,1));
-
-    // ---- ESCAPE ----
-    if(!won && exitZone){
-      const d = Math.hypot(PL.x-exitZone.x, PL.z-exitZone.z);
-      if(d < exitZone.r){
-        won = true; refreshHUD();
-        toast('The doors give. Cold air. You run.', 6000);
-        GH.state='dormant'; GH.present=false;
-        setTimeout(()=>{ els('done').classList.add('on'); }, 2200);
-      }
-    }
-
-    // ---- the haunting (mansion tuning: darker, hungrier) ----
-    updateGhost(dt);
-    whisperT += dt;
-
-    // With no power to restore, darkness alone drives dread; the lamp is a thin
-    // comfort. Baseline unease is higher than the observatory ever was.
-    const litSafety = clamp((PL.lamp && PL.batt>0 ? 0.26 : 0) + (sectorLit()*0.18), 0, 0.5);
-    let dt2 = (1 - litSafety) * 0.44 + 0.10;
-    if(GH.present) dt2 = Math.max(dt2, clamp(1 - ghDist()/13, 0, 1)*0.95);
-    if(GH.state==='charge') dt2 = 1;
-    dreadTarget = clamp(dt2, 0, 1);
-    dread = lerp(dread, dreadTarget, clamp(dt*(dreadTarget>dread?2.6:0.45),0,1));
-    SFX.setDread(dread);
-    SFX.setSub(GH.state==='charge' ? 1 : (GH.state==='scare'?0.6:0));
-
-    if(dread > 0.18){
-      hbPhase += dt*(0.9 + dread*2.2);
-      if(hbPhase >= 1){ hbPhase -= 1; SFX.heartbeat(clamp(dread*1.15,0.2,1)); }
-    } else hbPhase = 0;
-
-    // blackouts — more frequent in the mansion, and the deeper the dread the worse
-    blackout = Math.max(0, blackout - dt*3.2);
-    if(GH.state!=='scare' && dread>0.4 && Math.random() < dt*(0.08+dread*0.22)){
-      blackout = 0.5 + Math.random()*0.5; SFX.click();
-    }
-    if(dread>0.3 && Math.random() < dt*0.6) SFX.breath();
-    // disembodied whispers drifting through the rooms
-    if(whisperT>2.2 && Math.random() < dt*(0.15+dread*0.5)){ SFX.whisper(); whisperT=0; }
-
+    updateWorld(dt);
+    exposure = lerp(exposure, 1.0, clamp(dt*0.6,0,1));   // bright, steady daylight
     updateLights(dt);
     buildDynamic();
   }
@@ -3894,24 +3868,13 @@ function loop(t){
 
   // HUD
   fpsAcc += 1/dt; fpsN++; fpsT += dt;
-  if(fpsT > 0.4){
+  if(fpsT > 0.35){
     els('telFps').textContent = Math.round(fpsAcc/fpsN);
     els('telSec').textContent = sectorName();
     fpsAcc = 0; fpsN = 0; fpsT = 0;
-    els('bat').classList.toggle('low', PL.batt < 0.25);
-    els('bat').querySelector('.fil').style.transform = 'scaleX('+PL.batt.toFixed(3)+')';
   }
-  const tgt = paused ? null : pickTarget();
-  const pr = els('prompt');
-  if(tgt){
-    els('xh').classList.add('hot');
-    pr.classList.add('on');
-    els('pAct').textContent = tgt.kind==='cell' ? 'Take fuse cell'
-      : (carried>0 ? 'Seat fuse cell ('+carried+')' : 'Breaker — no cell in hand');
-  } else {
-    els('xh').classList.remove('hot');
-    pr.classList.remove('on');
-  }
+  drawStamina();
+  drawMinimap();
 }
 
 /* ==========================================================================
@@ -3924,7 +3887,6 @@ function bindInput(){
     keys[e.code] = true;
     if(['Space','KeyW','KeyA','KeyS','KeyD','ControlLeft'].includes(e.code)) e.preventDefault();
     if(e.repeat) return;
-    if(e.code==='KeyF'){ PL.lamp = !PL.lamp && PL.batt > 0.02; SFX.click(); }
     if(e.code==='KeyE') interact();
   });
   addEventListener('keyup', e=>{ keys[e.code] = false; });
@@ -3942,12 +3904,12 @@ function bindInput(){
   });
   addEventListener('mousemove', e=>{
     if(document.pointerLockElement !== cv) return;
-    if(GH.lock > 0) return;                 // you cannot look away
-    const s = 0.0021;
-    PL.yaw += e.movementX*s;
-    PL.pitch = clamp(PL.pitch - e.movementY*s, -1.50, 1.50);
-    if(PL.yaw > Math.PI) PL.yaw -= TAU; else if(PL.yaw < -Math.PI) PL.yaw += TAU;
+    const s = 0.0026;
+    CAM.yaw += e.movementX*s;
+    CAM.pitch = clamp(CAM.pitch - e.movementY*s, -0.35, 1.25);
+    if(CAM.yaw > Math.PI) CAM.yaw -= TAU; else if(CAM.yaw < -Math.PI) CAM.yaw += TAU;
   });
+  addEventListener('wheel', e=>{ if(started) CAM.dist = clamp(CAM.dist + Math.sign(e.deltaY)*0.6, 3, 12); }, {passive:true});
   els('btnResume').addEventListener('click', ()=>cv.requestPointerLock());
   addEventListener('resize', ()=>resize());
 
@@ -3989,6 +3951,8 @@ function boot(){
       uploadMesh('rock2', geoRock(3, 15, 0.26));
       uploadMesh('bb',    geoBillboard());
       uploadMesh('ghost', geoGhost());
+      uploadMesh('cone',  geoCone(14));
+      uploadMesh('terrain', geoTerrain(160));
     }],
     ['COMPILING SHADERS', ()=>{ initQuad(); initPrograms(); }],
     ['BAKING MATERIALS',  ()=>{ bakeMaterials(); }],
@@ -4041,14 +4005,17 @@ function boot(){
 function start(){
   if(started) return;
   started = true;
-  SFX.init(); SFX.resume(); SFX.fadeIn();
+  // drop the traveller onto the meadow
+  PL.x = spawnPt.x; PL.z = spawnPt.z; PL.y = terrainH(PL.x,PL.z);
+  PL.vx=PL.vy=PL.vz=0; PL.state='ground'; PL.stamina=1; CAM.yaw=0.4;
+  buildMiniBase(); refreshCount();
+  SFX.init(); SFX.resume(); SFX.fadeIn(); SFX.setRain(0.10);   // soft wind bed
   els('veil').classList.add('gone');
   els('hud').classList.add('on');
   refreshHUD();
   last = performance.now();
   cv.requestPointerLock();
-  setTimeout(()=>toast('The breaker is on the plinth, under the oculus.', 5200), 1800);
-  setTimeout(()=>toast('Something exhales in the dark behind you.', 4200), 12000);
+  setTimeout(()=>toast('Climb anything. Glide from the heights. Go wherever you like.', 6000), 1500);
 }
 
 /* ==========================================================================
@@ -4066,9 +4033,8 @@ window.__PEN = {
     return { frameNo, started, paused, W:R.W, H:R.H, q:QUALITY[R.q].name,
              instances:inst, tris:Math.round(tris), colliders:colliders.length,
              lights:lights.length, activeLights:R.nActive,
-             installed, carried, glError:gl.getError(),
-             dread:+dread.toFixed(3), ghState:GH.state, ghScare:+GH.scare.toFixed(3),
-             ghManifest:+GH.manifest.toFixed(2), blackout:+blackout.toFixed(2),
+             state:PL.state, stamina:+PL.stamina.toFixed(2), discovered, seeds,
+             glError:gl.getError(),
              pos:[+PL.x.toFixed(2), +PL.y.toFixed(2), +PL.z.toFixed(2)] };
   },
   winding(){
@@ -4076,45 +4042,30 @@ window.__PEN = {
     for(const n in meshes) out.push(windingReport(n, meshes[n].src));
     return out;
   },
-  // drive the player without a mouse, for automated traversal checks
-  tp(x,y,z,yaw){ PL.x=x; PL.y=y; PL.z=z; if(yaw!==undefined) PL.yaw=yaw;
-                 PL.vx=PL.vy=PL.vz=0; R.needReset=2; },
+  tp(x,z,yaw){ PL.x=x; PL.z=z; PL.y=terrainH(x,z); PL.vx=PL.vy=PL.vz=0; PL.state='ground';
+               if(yaw!==undefined){ CAM.yaw=yaw; PL.face=yaw; } R.needReset=2; },
   press(code,v){ keys[code] = !!v; },
-  interact,
-  GH,
-  spawnGhost(){ ghManifest(true); },
-  forceScare(){ GH.present=true; GH.manifest=1; GH.x=PL.x-Math.sin(PL.yaw)*3; GH.z=PL.z+Math.cos(PL.yaw)*3;
-                GH.state='charge'; GH.stateT=2; GH.charge=1; },
-  setGhostState(s){ GH.present=true; GH.manifest=1; GH.state=s; GH.stateT=0; },
-  // ground-floor collision audit: flood fill from spawn, report traps + unreachable targets
+  interact, CAM, PL,
+  towers, shrines, pickups,
+  // COLLISION AUDIT — verify the terrain heightfield is sound everywhere and no
+  // prop collider is buried under the ground (which would trap the player).
   audit(){
-    const hw=PL.hw, hS=PL.hStand, step=0.25;
-    const X0=MX0, X1=MX1, Z0=MZ0, Z1=MZ1;
-    const nx=Math.round((X1-X0)/step), nz=Math.round((Z1-Z0)/step);
-    const id=(i,j)=>i*nz+j;
-    const stand=new Uint8Array(nx*nz);
-    for(let i=0;i<nx;i++) for(let j=0;j<nz;j++)
-      stand[id(i,j)] = hits(X0+i*step, 0.06, Z0+j*step, hw, hS) ? 0 : 1;
-    const si=Math.round((0-X0)/step), sj=Math.round((23-Z0)/step);
-    const seen=new Uint8Array(nx*nz); const q=[[si,sj]]; seen[id(si,sj)]=1;
-    while(q.length){ const [i,j]=q.pop();
-      for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){
-        const a=i+di,b=j+dj; if(a<0||b<0||a>=nx||b>=nz) continue;
-        if(seen[id(a,b)]||!stand[id(a,b)]) continue; seen[id(a,b)]=1; q.push([a,b]);
-      }
+    let nan=0, buried=0, floating=0, checked=0;
+    // heightfield sanity over a coarse grid
+    for(let x=-WORLD;x<=WORLD;x+=6) for(let z=-WORLD;z<=WORLD;z+=6){
+      const h=terrainH(x,z); checked++;
+      if(!isFinite(h)) nan++;
     }
-    const reach=(x,z)=>{ const ci=Math.round((x-X0)/step), cj=Math.round((z-Z0)/step);
-      for(let r=0;r<=8;r++) for(let di=-r;di<=r;di++) for(let dj=-r;dj<=r;dj++){
-        const a=ci+di,b=cj+dj; if(a<0||b<0||a>=nx||b>=nz) continue;
-        if(stand[id(a,b)]&&seen[id(a,b)]) return true; } return false; };
-    const tg=[
-      ['FOYER',0,21],['LIBRARY',-18,20],['DINING',18,21],['GREAT HALL',3,8],
-      ['DRAWING',-18,7],['STUDY',18,7],['REAR HALL',0,-11],['KITCHEN',-18,-11],
-      ['BALLROOM',18,-11],['EXIT',exitZone.x-2,exitZone.z]
-    ].map(t=>({where:t[0], ok:reach(t[1],t[2])}));
-    let sc=0, rc=0; for(let k=0;k<stand.length;k++){ sc+=stand[k]; rc+=seen[k]; }
-    return { grid:[nx,nz], standableCells:sc, reachableFromSpawn:rc,
-             unreachableTargets: tg.filter(t=>!t.ok) };
+    // prop colliders: base should sit on/near the terrain (not floating or sunk badly)
+    for(const c of colliders){
+      const cx=(c.x0+c.x1)/2, cz=(c.z0+c.z1)/2, g=terrainH(cx,cz);
+      if(c.y1 < g-0.5) buried++;              // whole collider below ground = a trap
+      if(c.y0 > g+3.0) floating++;            // collider well above ground
+    }
+    // spawn must be on solid ground, not inside a prop
+    const spawnClear = !hits(spawnPt.x, terrainH(spawnPt.x,spawnPt.z)+0.5, spawnPt.z, PL.hw, PL.h);
+    return { heightSamples:checked, nonFiniteHeights:nan, buriedColliders:buried,
+             floatingColliders:floating, spawnClear, colliders:colliders.length };
   }
 };
 
